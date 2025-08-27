@@ -1,0 +1,102 @@
+name: Deploy Backend to Server
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'backend/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy-backend.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      working-directory: ./backend
+      run: go mod download
+    
+    - name: Run tests
+      working-directory: ./backend
+      run: go test -v ./...
+    
+    - name: Build binary
+      working-directory: ./backend
+      run: go build -v ./...
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to Server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        password: ${{ secrets.SERVER_PASSWORD }}
+        script: |
+          set -e
+          
+          # Navigate to project directory
+          cd ~/ecommerce/ecommerce-app
+          
+          # Pull latest changes
+          git fetch origin
+          git reset --hard origin/master
+          git pull origin master
+          
+          # Stop running containers
+          docker-compose down
+          
+          # Rebuild and start containers
+          docker-compose build --no-cache backend
+          docker-compose up -d
+          
+          # Check if services are healthy
+          sleep 10
+          docker-compose ps
+          
+          # Show logs for verification
+          echo "=== Backend Logs ==="
+          docker-compose logs --tail=50 backend
+          
+          echo "✅ Backend deployment completed successfully!"
+    
+    - name: Verify Deployment
+      run: |
+        # Wait a moment for services to start
+        sleep 15
+        
+        # Health check
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_HOST }}:8080/api/health || echo "000")
+        
+        if [ "$response" = "200" ]; then
+          echo "✅ Backend health check passed"
+        else
+          echo "❌ Backend health check failed (HTTP $response)"
+          exit 1
+        fi
+    
+    - name: Notify Success
+      run: |
+        echo "🎉 Backend deployment to ${{ secrets.SERVER_HOST }} completed successfully!"
+        echo "Backend is running at: http://${{ secrets.SERVER_HOST }}:8080"

@@ -1,0 +1,173 @@
+name: Deploy Ecommerce Services to Server
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'ecommerce-app/**'
+      - 'webhook-service/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    # Test Backend
+    - name: Test Ecommerce Backend
+      working-directory: ./ecommerce-app/backend
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+    
+    # Test Webhook Services
+    - name: Test API Gateway
+      working-directory: ./webhook-service/api-gateway
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+    
+    - name: Test Request Handler
+      working-directory: ./webhook-service/request-handler
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+    
+    - name: Test Consumer
+      working-directory: ./webhook-service/consumer
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to Server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        password: ${{ secrets.SERVER_PASSWORD }}
+        script: |
+          set -e
+          
+          # Navigate to project directory
+          cd ~/ecommerce
+          
+          # Pull latest changes
+          git fetch origin
+          git reset --hard origin/master
+          git pull origin master
+          
+          echo "🛑 Stopping all services..."
+          
+          # Stop ecommerce services
+          cd ~/ecommerce/ecommerce-app
+          docker-compose down || echo "Ecommerce services not running"
+          
+          # Stop webhook services
+          cd ~/ecommerce/webhook-service
+          docker-compose down || echo "Webhook services not running"
+          
+          echo "🔨 Building and starting ecommerce services..."
+          
+          # Build and start ecommerce services
+          cd ~/ecommerce/ecommerce-app
+          docker-compose build --no-cache
+          docker-compose up -d
+          
+          echo "🔨 Building and starting webhook services..."
+          
+          # Build and start webhook services
+          cd ~/ecommerce/webhook-service
+          docker-compose build --no-cache
+          docker-compose up -d
+          
+          echo "⏳ Waiting for services to start..."
+          sleep 20
+          
+          echo "📊 Service Status:"
+          echo "=== Ecommerce Services ==="
+          cd ~/ecommerce/ecommerce-app
+          docker-compose ps
+          
+          echo "=== Webhook Services ==="
+          cd ~/ecommerce/webhook-service
+          docker-compose ps
+          
+          echo "📋 Recent Logs:"
+          echo "=== Backend Logs ==="
+          cd ~/ecommerce/ecommerce-app
+          docker-compose logs --tail=30 backend
+          
+          echo "=== API Gateway Logs ==="
+          cd ~/ecommerce/webhook-service
+          docker-compose logs --tail=30 api-gateway
+          
+          echo "✅ Deployment completed successfully!"
+    
+    - name: Verify Ecommerce Backend
+      run: |
+        # Wait for services to fully start
+        sleep 30
+        
+        # Health check for Backend
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_HOST }}:8080/api/health || echo "000")
+        
+        if [ "$response" = "200" ]; then
+          echo "✅ Ecommerce Backend health check passed"
+        else
+          echo "❌ Ecommerce Backend health check failed (HTTP $response)"
+          exit 1
+        fi
+    
+    - name: Verify Webhook Services
+      run: |
+        # Health check for API Gateway
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_HOST }}:8081/health || echo "000")
+        
+        if [ "$response" = "200" ]; then
+          echo "✅ Webhook API Gateway health check passed"
+        else
+          echo "❌ Webhook API Gateway health check failed (HTTP $response)"
+          exit 1
+        fi
+    
+    - name: Notify Success
+      run: |
+        echo "🎉 Full deployment to ${{ secrets.SERVER_HOST }} completed successfully!"
+        echo ""
+        echo "🌐 Services are available at:"
+        echo "- Main site: http://ecommerce.itmf.com.vn"
+        echo "- Backend API: http://ecommerce.itmf.com.vn/api/"
+        echo "- Webhook API: http://ecommerce.itmf.com.vn/webhook/"
+        echo "- Monitoring: http://ecommerce.itmf.com.vn/monitoring/"
+        echo ""
+        echo "🔗 Direct access:"
+        echo "- Backend: http://${{ secrets.SERVER_HOST }}:8080"
+        echo "- Frontend: http://${{ secrets.SERVER_HOST }}:3000"
+        echo "- Webhook API: http://${{ secrets.SERVER_HOST }}:8081"
+        echo "- Load Balancer: http://${{ secrets.SERVER_HOST }}:80"

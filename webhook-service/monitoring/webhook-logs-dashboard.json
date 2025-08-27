@@ -1,0 +1,90 @@
+{
+  "id": null,
+  "title": "Webhook Service Logs",
+  "tags": ["webhook", "logs", "loki"],
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Recent Webhook Logs",
+      "type": "logs",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "{service=~\"api-gateway|request-handler|consumer\"}",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Log Volume by Service",
+      "type": "stat",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "sum by (service) (count_over_time({service=~\"api-gateway|request-handler|consumer\"}[5m]))",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Error Logs",
+      "type": "logs",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "targets": [
+        {
+          "expr": "{service=~\"api-gateway|request-handler|consumer\"} |~ \"(?i)(error|fail|exception)\"",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      }
+    }
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "schemaVersion": 30,
+  "version": 1
+}

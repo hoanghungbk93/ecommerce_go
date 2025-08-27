@@ -1,0 +1,273 @@
+version: '3.8'
+
+services:
+  # Load Balancer (Nginx)
+  load-balancer:
+    build:
+      context: ./load-balancer
+      dockerfile: Dockerfile
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api-gateway-1
+      - api-gateway-2
+    networks:
+      - webhook-network
+    volumes:
+      - ./load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+    restart: unless-stopped
+
+  # API Gateway instances (multiple for load balancing)
+  api-gateway-1:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=api-gateway-1
+      - PORT=8080
+      - WEBHOOK_HANDLER_URL=http://request-handler-1:8081,http://request-handler-2:8081
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - request-handler-1
+      - request-handler-2
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=api-gateway"
+
+  api-gateway-2:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=api-gateway-2
+      - PORT=8080
+      - WEBHOOK_HANDLER_URL=http://request-handler-1:8081,http://request-handler-2:8081
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - request-handler-1
+      - request-handler-2
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=api-gateway"
+
+  # Request Handler instances
+  request-handler-1:
+    build:
+      context: ./request-handler
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=request-handler-1
+      - PORT=8081
+      - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672/
+      - WEBHOOK_SECRET=your-webhook-secret-key-change-in-production
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=request-handler"
+
+  request-handler-2:
+    build:
+      context: ./request-handler
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=request-handler-2
+      - PORT=8081
+      - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672/
+      - WEBHOOK_SECRET=your-webhook-secret-key-change-in-production
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - rabbitmq
+      - redis
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=request-handler"
+
+  # Consumer instances
+  consumer-1:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=consumer-1
+      - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672/
+      - DATABASE_URL=postgres://admin:password@postgres:5432/webhook_db?sslmode=disable
+      - WEBHOOK_SECRET=your-webhook-secret-key-change-in-production
+    depends_on:
+      - rabbitmq
+      - postgres
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=consumer"
+
+  consumer-2:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_NAME=consumer-2
+      - RABBITMQ_URL=amqp://admin:password@rabbitmq:5672/
+      - DATABASE_URL=postgres://admin:password@postgres:5432/webhook_db?sslmode=disable
+      - WEBHOOK_SECRET=your-webhook-secret-key-change-in-production
+    depends_on:
+      - rabbitmq
+      - postgres
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    labels:
+      - "logging=promtail"
+      - "service=consumer"
+
+  # Message Queue (RabbitMQ)
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for caching and rate limiting
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+  # PostgreSQL database (using existing database from main ecommerce app)
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: webhook_db
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - webhook-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d webhook_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Monitoring (Prometheus)
+  prometheus:
+    build:
+      context: ./monitoring
+      dockerfile: Dockerfile.prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+  # Nginx Prometheus Exporter
+  nginx-exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx-exporter
+    ports:
+      - "9113:9113"
+    depends_on:
+      - load-balancer
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+  # Grafana for dashboards
+  grafana:
+    image: grafana/grafana:10.0.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./monitoring/grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      - ./monitoring/webhook-logs-dashboard.json:/etc/grafana/provisioning/dashboards/webhook-logs-dashboard.json:ro
+    depends_on:
+      - loki
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+  # Loki for log aggregation
+  loki:
+    image: grafana/loki:2.9.0
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+  # Promtail for log collection
+  promtail:
+    image: grafana/promtail:2.9.0
+    volumes:
+      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./monitoring/promtail-config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - webhook-network
+    restart: unless-stopped
+
+networks:
+  webhook-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+  redis_data:
+  postgres_data:
+  grafana_data:
+  loki_data:

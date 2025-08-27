@@ -1,0 +1,139 @@
+name: Deploy Webhook Service to Server
+
+on:
+  push:
+    branches: [ master ]
+    paths:
+      - 'api-gateway/**'
+      - 'request-handler/**'
+      - 'consumer/**'
+      - 'load-balancer/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy-webhook.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-webhook-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-webhook-
+    
+    - name: Test API Gateway
+      working-directory: ./api-gateway
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+    
+    - name: Test Request Handler
+      working-directory: ./request-handler
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+    
+    - name: Test Consumer
+      working-directory: ./consumer
+      run: |
+        go mod download
+        go test -v ./...
+        go build -v ./...
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/master'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to Server
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        password: ${{ secrets.SERVER_PASSWORD }}
+        script: |
+          set -e
+          
+          # Navigate to project directory
+          cd ~/ecommerce/webhook-service
+          
+          # Pull latest changes
+          git fetch origin
+          git reset --hard origin/master
+          git pull origin master
+          
+          # Stop running containers
+          docker-compose down
+          
+          # Remove old images to ensure fresh build
+          docker image prune -f
+          
+          # Rebuild and start all services
+          docker-compose build --no-cache
+          docker-compose up -d
+          
+          # Check if services are healthy
+          sleep 15
+          docker-compose ps
+          
+          # Show logs for verification
+          echo "=== API Gateway Logs ==="
+          docker-compose logs --tail=30 api-gateway
+          
+          echo "=== Request Handler Logs ==="
+          docker-compose logs --tail=30 request-handler
+          
+          echo "=== Consumer Logs ==="
+          docker-compose logs --tail=30 consumer
+          
+          echo "=== Load Balancer Logs ==="
+          docker-compose logs --tail=30 load-balancer
+          
+          echo "✅ Webhook service deployment completed successfully!"
+    
+    - name: Verify API Gateway Deployment
+      run: |
+        # Wait for services to fully start
+        sleep 20
+        
+        # Health check for API Gateway
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_HOST }}:8080/health || echo "000")
+        
+        if [ "$response" = "200" ]; then
+          echo "✅ API Gateway health check passed"
+        else
+          echo "❌ API Gateway health check failed (HTTP $response)"
+          exit 1
+        fi
+    
+    - name: Verify Load Balancer
+      run: |
+        # Health check for Load Balancer
+        response=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.SERVER_HOST }}:80/ || echo "000")
+        
+        if [ "$response" = "200" ] || [ "$response" = "301" ] || [ "$response" = "302" ]; then
+          echo "✅ Load Balancer health check passed"
+        else
+          echo "⚠️ Load Balancer health check returned HTTP $response"
+        fi
+    
+    - name: Notify Success
+      run: |
+        echo "🎉 Webhook service deployment to ${{ secrets.SERVER_HOST }} completed successfully!"
+        echo "API Gateway: http://${{ secrets.SERVER_HOST }}:8080"
+        echo "Load Balancer: http://${{ secrets.SERVER_HOST }}:80"
+        echo "Grafana (Monitoring): http://${{ secrets.SERVER_HOST }}:3000"

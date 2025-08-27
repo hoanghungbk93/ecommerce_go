@@ -1,0 +1,184 @@
+# =============================================================================
+# Ecommerce App .gitignore
+# =============================================================================
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.staging
+
+# Backend (Go) Files
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+backend/main
+backend/ecommerce-backend
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Vendor directory
+vendor/
+
+# Go modules download cache
+go/pkg/mod/
+
+# Frontend (Next.js) Files
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Production build
+frontend/.next/
+frontend/out/
+frontend/build/
+dist/
+build/
+.next/
+out/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache (https://parceljs.org/)
+.cache
+.parcel-cache
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# JetBrains
+*.iws
+*.iml
+*.ipr
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+dump.sql
+*.backup
+
+# Docker Files
+docker-compose.override.yml
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+
+# Security Files
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Local Development
+.local
+local/
+
+# Backup Files
+*.backup
+
+# Migration Files (if auto-generated)
+migrations/auto_*.sql
+
+# Test Files
+*.test
+
+# Compiled Source
+*.com
+*.class
+*.o
+
+# Packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip

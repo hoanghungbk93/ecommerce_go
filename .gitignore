@@ -1,0 +1,65 @@
+# =============================================================================
+# Root Ecommerce Project .gitignore
+# =============================================================================
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+
+# Deployment Logs
+deployment_*.log
+
+# Backup Files
+backups/
+*.backup
+*.bak
+*.tar.gz
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Local Configuration
+local/
+.local
+
+# Security Files
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Documentation Build
+docs/_build/
+docs/.doctrees/
+
+# Test Results
+test-results/
+coverage/
+
+# Logs
+logs/
+*.log

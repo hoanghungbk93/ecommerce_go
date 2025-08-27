@@ -1,0 +1,173 @@
+# =============================================================================
+# Webhook Service .gitignore
+# =============================================================================
+
+# Environment Variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+
+# Go Files
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Service binaries
+api-gateway/api-gateway
+api-gateway/main
+request-handler/request-handler
+request-handler/main
+consumer/consumer
+consumer/main
+load-tester/load-tester
+load-tester/main
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+*.prof
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Vendor directory
+vendor/
+
+# Go modules download cache
+go/pkg/mod/
+
+# IDE Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# JetBrains
+*.iws
+*.iml
+*.ipr
+
+# Vim
+*.swp
+*.swo
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Docker Files
+docker-compose.override.yml
+
+# Monitoring Data
+monitoring/data/
+grafana/data/
+loki/data/
+prometheus/data/
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+dump.sql
+*.backup
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary Files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+
+# Security Files
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Local Development
+.local
+local/
+
+# Backup Files
+*.backup
+
+# Test Files
+*.test
+
+# Coverage
+coverage/
+*.lcov
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Load Testing Results
+load-test-results/
+*.csv
+*.html
+
+# Compiled Source
+*.com
+*.class
+*.o
+
+# Packages
+*.7z
+*.dmg
+*.gz
+*.iso
+*.jar
+*.rar
+*.tar
+*.zip
+
+# Service specific configs (if sensitive)
+config/local.yml
+config/development.yml
+config/production.yml
+
+# RabbitMQ data
+rabbitmq/data/
+
+# Redis data
+redis/data/
