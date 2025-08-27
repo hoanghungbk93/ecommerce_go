@@ -34,7 +34,7 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:3001", "http://ecommerce.itmf.com.vn", "https://ecommerce.itmf.com.vn"},
+		AllowOrigins:     []string{"http://localhost:3000", "http://localhost:3001", "http://ecommerce.itmf.com.vn", "https://ecommerce.itmf.com.vn", "http://api-ecommerce.itmf.com.vn", "https://api-ecommerce.itmf.com.vn", "http://monitoring-ecommerce.itmf.com.vn", "https://monitoring-ecommerce.itmf.com.vn"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
