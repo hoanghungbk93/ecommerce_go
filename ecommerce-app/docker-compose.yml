@@ -34,6 +34,19 @@ services:
       - "logging=promtail"
       - "service=frontend"
 
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.seed
+    environment:
+      DATABASE_URL: postgres://odoo16:hoanghungbk@localhost:5432/ecommerce?sslmode=disable
+    network_mode: host
+    profiles:
+      - seed
+    labels:
+      - "logging=promtail"
+      - "service=seed"
+
 networks:
   ecommerce-network:
     driver: bridge
