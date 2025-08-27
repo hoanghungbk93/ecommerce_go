@@ -1,12 +1,10 @@
-version: '3.8'
-
 services:
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgres://odoo16:hoanghungbk@host.docker.internal:5432/ecommerce?sslmode=disable
+      DATABASE_URL: postgres://odoo16:hoanghungbk@172.17.0.1:5432/ecommerce?sslmode=disable
       JWT_SECRET: your-super-secret-jwt-key-change-in-production
       PORT: 8080
       VNPAY_TMN_CODE: your-vnpay-tmn-code
