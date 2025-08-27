@@ -6,7 +6,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
-      DATABASE_URL: postgres://admin:1234@host.docker.internal:5432/ecommerce?sslmode=disable
+      DATABASE_URL: postgres://odoo16:hoanghungbk@host.docker.internal:5432/ecommerce?sslmode=disable
       JWT_SECRET: your-super-secret-jwt-key-change-in-production
       PORT: 8080
       VNPAY_TMN_CODE: your-vnpay-tmn-code
@@ -28,13 +28,16 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     environment:
-      REACT_APP_API_URL: http://localhost:8080/api/v1
+      REACT_APP_API_URL: http://ecommerce.itmf.com.vn/api
     ports:
-      - "3001:80"
+      - "3000:80"
     depends_on:
       - backend
     networks:
       - ecommerce-network
+    labels:
+      - "logging=promtail"
+      - "service=frontend"
 
 networks:
   ecommerce-network:
