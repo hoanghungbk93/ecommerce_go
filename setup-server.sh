@@ -10,19 +10,30 @@ set -e
 echo "🚀 Setting up ecommerce projects on server 103.176.179.183..."
 echo "🌐 Domain: ecommerce.itmf.com.vn"
 
-# Create ecommerce directory
-echo "📁 Creating ~/ecommerce directory..."
-mkdir -p ~/ecommerce
-cd ~/ecommerce
-
 echo ""
-echo "📋 You need to manually clone your repository. Run this command:"
+echo "⚠️  IMPORTANT: You need to clone your repository FIRST!"
+echo "📋 Run this command BEFORE running this script:"
 echo ""
 echo "cd ~"
 echo "git clone https://github.com/YOUR_USERNAME/ecommerce.git"
 echo ""
 echo "Replace YOUR_USERNAME with your actual GitHub username!"
 echo "This will create ~/ecommerce/ with both ecommerce-app/ and webhook-service/ inside."
+echo ""
+read -p "Have you already cloned the repository? (y/n): " -n 1 -r
+echo
+if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    echo "Please clone the repository first and then run this script again."
+    exit 1
+fi
+
+# Check if ecommerce directory exists
+if [[ ! -d "$HOME/ecommerce" ]]; then
+    echo "❌ Directory ~/ecommerce not found. Please clone the repository first."
+    exit 1
+fi
+
+echo "✅ Found ~/ecommerce directory"
 
 # Install Docker if not already installed
 echo ""
@@ -157,16 +168,14 @@ echo "🎉 Server setup complete!"
 echo ""
 echo "📋 Directory structure:"
 echo "~/ecommerce/"
-echo "├── ecommerce-app/ (you need to clone this)"
-echo "└── webhook-service/ (you need to clone this)"
+echo "├── ecommerce-app/ ✅"
+echo "└── webhook-service/ ✅"
 echo ""
 echo "🔧 Next steps:"
-echo "1. Clone your repositories to ~/ecommerce/"
-echo "2. Add these 3 GitHub secrets:"
-echo "   - SERVER_HOST: 103.176.179.183"
-echo "   - SERVER_USER: [your server username]"
-echo "   - SERVER_PASSWORD: [your server password]"
-echo "3. Push to master branch to trigger automatic deployment"
+echo "1. ✅ Repository cloned"
+echo "2. ✅ Docker and Docker Compose installed"
+echo "3. ✅ Nginx configured for ecommerce.itmf.com.vn"
+echo "4. Now push to master branch to trigger automatic deployment!"
 echo ""
 echo "🌐 Your site will be available at:"
 echo "- Main site: http://ecommerce.itmf.com.vn"
