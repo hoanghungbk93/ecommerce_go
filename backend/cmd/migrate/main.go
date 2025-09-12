@@ -11,6 +11,7 @@ import (
 	"ecommerce-backend/internal/migrations"
 
 	"github.com/joho/godotenv"
+	"gorm.io/gorm"
 )
 
 func main() {
