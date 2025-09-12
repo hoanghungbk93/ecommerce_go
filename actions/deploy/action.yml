@@ -1,0 +1,26 @@
+name: "Auto deploy to AWS"
+description: "Automatically deploy cloudformation to AWS"
+author: "khanhnd.uet@gmail.com"
+
+inputs:
+  GITHUB_TOKEN:
+    description: "Github secrets token"
+    required: true
+  VERSION_BUILD:
+    description: "Version build: major, minor, patch"
+    required: false
+  PREFIX:
+    description: "Version prefix"
+    required: false
+    default: v
+  ACTION:
+    description: "Action to perform"
+    required: false
+  FILE_CHANGED_DETECTION:
+    description: "File changed detection"
+    required: false
+    default: v
+
+runs:
+  using: "node12"
+  main: "dist/index.js"

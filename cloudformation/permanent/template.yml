@@ -1,0 +1,197 @@
+---
+Description: Creates the permanent resources for the ecommerce-app (Free Tier Optimized).
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, prod]
+    Default: dev
+
+  RDSRootPassword:
+    Description: The root user's password.
+    Type: String
+    NoEcho: true
+
+  InstanceClass:
+    Description: The RDS instance class.
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t2.micro]
+
+  PubliclyAccessible:
+    Description: Whether RDS should be publicly accessible.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+Resources:
+  # RDS PostgreSQL Database
+  EcommerceDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-ecommerce-db
+      DBName: ecommerce
+      Engine: postgres
+      EngineVersion: '13.22'
+      DBInstanceClass: !Ref InstanceClass
+      AllocatedStorage: 20
+      StorageType: gp2
+      MasterUsername: ecommerce
+      MasterUserPassword: !Ref RDSRootPassword
+      PubliclyAccessible: !Ref PubliclyAccessible
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      DeletionProtection: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecommerce-database
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Security Group for RDS
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS PostgreSQL database
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+          Description: Allow public access (for development)
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecommerce-db-sg
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Security Group for Application
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP access to backend
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP access to frontend
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP access
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS access
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecommerce-app-sg
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # S3 Bucket for static assets
+  EcommerceBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-ecommerce-assets
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # SSM Parameters for database connection
+  DatabaseHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/db/host
+      Type: String
+      Value: !GetAtt EcommerceDB.Endpoint.Address
+
+  DatabasePortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/db/port
+      Type: String
+      Value: !GetAtt EcommerceDB.Endpoint.Port
+
+  DatabaseNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/db/name
+      Type: String
+      Value: ecommerce
+
+  DatabaseUserParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/db/username
+      Type: String
+      Value: ecommerce
+
+  DatabasePasswordParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/db/password
+      Type: String
+      Value: !Ref RDSRootPassword
+
+  # S3 Bucket Parameter
+  S3BucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/s3/bucket
+      Type: String
+      Value: !Ref EcommerceBucket
+
+  # Security Group Parameters
+  AppSecurityGroupParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/security-group/app
+      Type: String
+      Value: !Ref AppSecurityGroup
+
+  DBSecurityGroupParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/security-group/db
+      Type: String
+      Value: !Ref DBSecurityGroup
+
+Outputs:
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL Endpoint
+    Value: !GetAtt EcommerceDB.Endpoint.Address
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-db-endpoint
+
+  DatabasePort:
+    Description: RDS PostgreSQL Port
+    Value: !GetAtt EcommerceDB.Endpoint.Port
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-db-port
+
+  S3Bucket:
+    Description: S3 Bucket for assets
+    Value: !Ref EcommerceBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-s3-bucket
+
+  AppSecurityGroup:
+    Description: Security Group for application
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-app-sg

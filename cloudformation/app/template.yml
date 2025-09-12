@@ -1,0 +1,362 @@
+Description: Creates the ECS application resources for ecommerce-app (Free Tier Optimized).
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ImageUrl:
+    Description: The ECR repository URL.
+    Type: String
+
+  GitSha:
+    Description: The GitSha of commit project
+    Type: String
+
+  CPU:
+    Description: The number of CPU units required by the ECS tasks.
+    Type: Number
+    Default: 256
+
+  Memory:
+    Description: The amount of memory required by the tasks.
+    Type: Number
+    Default: 512
+
+  DesiredCount:
+    Description: The desired number of service tasks to run.
+    Type: Number
+    Default: 1
+
+Resources:
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-ecommerce-cluster
+      CapacityProviders:
+        - FARGATE
+        - FARGATE_SPOT
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Task Execution Role
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecommerce-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SSMParameterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentName}/ecommerce/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+
+  # Task Role
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecommerce-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::{{resolve:ssm:/${EnvironmentName}/ecommerce/s3/bucket}}'
+                  - !Sub 'arn:aws:s3:::{{resolve:ssm:/${EnvironmentName}/ecommerce/s3/bucket}}/*'
+
+  # CloudWatch Log Groups
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-ecommerce-backend
+      RetentionInDays: 7
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-ecommerce-frontend
+      RetentionInDays: 7
+
+  # Backend Task Definition
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-ecommerce-backend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref CPU
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Sub ${ImageUrl}/backend:${GitSha}
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: PORT
+              Value: '8080'
+            - Name: ENVIRONMENT
+              Value: !Ref EnvironmentName
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/db/url
+            - Name: JWT_SECRET
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/jwt/secret
+            - Name: VNPAY_TMN_CODE
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/vnpay/tmn-code
+            - Name: VNPAY_HASH_KEY
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/vnpay/hash-key
+          Essential: true
+
+  # Frontend Task Definition
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-ecommerce-frontend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref CPU
+      Memory: !Ref Memory
+      ExecutionRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Sub ${ImageUrl}/frontend:${GitSha}
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: REACT_APP_API_URL
+              Value: !Sub http://${ApplicationLoadBalancer.DNSName}:8080/api/v1
+          Secrets:
+            - Name: REACT_APP_GOOGLE_CLIENT_ID
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/google/client-id
+          Essential: true
+
+  # Backend ECS Service
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn: BackendListener
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-ecommerce-backend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Sub '{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}'
+          Subnets:
+            - subnet-095a264d86c3670bb
+            - subnet-0192656fc2b518bf9
+            - subnet-07a3b902dc925f6e4
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - TargetGroupArn: !Ref BackendTargetGroup
+          ContainerName: backend
+          ContainerPort: 8080
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Frontend ECS Service
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: FrontendListener
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-ecommerce-frontend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: !Ref DesiredCount
+      CapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Sub '{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}'
+          Subnets:
+            - subnet-095a264d86c3670bb
+            - subnet-0192656fc2b518bf9
+            - subnet-07a3b902dc925f6e4
+          AssignPublicIp: ENABLED
+      LoadBalancers:
+        - TargetGroupArn: !Ref FrontendTargetGroup
+          ContainerName: frontend
+          ContainerPort: 80
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-ecommerce-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - subnet-095a264d86c3670bb
+        - subnet-0192656fc2b518bf9
+        - subnet-07a3b902dc925f6e4
+      SecurityGroups:
+        - !Sub '{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}'
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Backend Target Group
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-ecommerce-backend-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: vpc-0669e01e74e0eada3
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # Frontend Target Group
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-ecommerce-frontend-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId: vpc-0669e01e74e0eada3
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  # ALB Listeners
+  BackendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 8080
+      Protocol: HTTP
+
+  FrontendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # SSM Parameters for ALB URLs
+  BackendUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/backend/url
+      Type: String
+      Value: !Sub http://${ApplicationLoadBalancer.DNSName}:8080
+
+  FrontendUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/frontend/url
+      Type: String
+      Value: !Sub http://${ApplicationLoadBalancer.DNSName}
+
+Outputs:
+  BackendUrl:
+    Description: Backend Service URL
+    Value: !Sub http://${ApplicationLoadBalancer.DNSName}:8080
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-backend-url
+
+  FrontendUrl:
+    Description: Frontend Service URL
+    Value: !Sub http://${ApplicationLoadBalancer.DNSName}
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-frontend-url
+
+  ClusterName:
+    Description: ECS Cluster Name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-cluster

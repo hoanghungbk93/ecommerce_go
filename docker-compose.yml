@@ -1,0 +1,54 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      DATABASE_URL: postgres://odoo16:hoanghungbk@localhost:5432/ecommerce?sslmode=disable
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      PORT: 8080
+      VNPAY_TMN_CODE: your-vnpay-tmn-code
+      VNPAY_HASH_KEY: your-vnpay-hash-key
+      VNPAY_URL: https://sandbox.vnpayment.vn/paymentv2/vncpay.html
+      VNPAY_RETURN_URL: http://ecommerce.itmf.com.vn/payment/return
+      ENVIRONMENT: production
+    labels:
+      - "logging=promtail"
+      - "service=backend"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=http://api-ecommerce.itmf.com.vn
+        - REACT_APP_GOOGLE_CLIENT_ID=your_google_client_id_here.apps.googleusercontent.com
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    networks:
+      - ecommerce-network
+    labels:
+      - "logging=promtail"
+      - "service=frontend"
+
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.seed
+    environment:
+      DATABASE_URL: postgres://odoo16:hoanghungbk@localhost:5432/ecommerce?sslmode=disable
+    network_mode: host
+    profiles:
+      - seed
+    labels:
+      - "logging=promtail"
+      - "service=seed"
+
+networks:
+  ecommerce-network:
+    driver: bridge
+  webhook-service_webhook-network:
+    external: true
