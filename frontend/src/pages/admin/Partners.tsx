@@ -13,7 +13,7 @@ import { Partner } from '../../types';
 const Partners: React.FC = () => {
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
-  const { partners, isLoading, error, pagination } = useAppSelector((state) => state.partners);
+  const { partners, isLoading, error } = useAppSelector((state) => state.partners);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);

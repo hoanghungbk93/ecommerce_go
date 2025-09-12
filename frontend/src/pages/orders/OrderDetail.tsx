@@ -1,15 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { useDispatch, useSelector } from 'react-redux';
-import { RootState, AppDispatch } from '../../store';
 import { ordersAPI } from '../../services/api';
 import { Order } from '../../types';
 
 const OrderDetail: React.FC = () => {
   const { id: orderId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const dispatch = useDispatch<AppDispatch>();
-  const { user } = useSelector((state: RootState) => state.auth);
   
   const [order, setOrder] = useState<Order | null>(null);
   const [loading, setLoading] = useState(true);

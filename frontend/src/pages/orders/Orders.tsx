@@ -3,7 +3,6 @@ import { useDispatch, useSelector } from 'react-redux';
 import { Link, useNavigate } from 'react-router-dom';
 import { RootState, AppDispatch } from '../../store';
 import { fetchUserOrders } from '../../store/slices/ordersSlice';
-import { Order } from '../../types';
 
 type OrderStatus = 'all' | 'pending' | 'confirmed' | 'shipped' | 'delivered' | 'cancelled';
 type PaymentStatus = 'all' | 'pending' | 'paid' | 'failed' | 'refunded';

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { userAPI } from '../../services/api';
 import { User } from '../../types';
 import UserModal from '../../components/admin/UserModal';
@@ -15,11 +15,7 @@ const Users: React.FC = () => {
     total: 0
   });
 
-  useEffect(() => {
-    loadUsers();
-  }, [pagination.page]);
-
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     try {
       setLoading(true);
       const response = await userAPI.getAllUsers({
@@ -37,7 +33,11 @@ const Users: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [pagination.page, pagination.limit]);
+
+  useEffect(() => {
+    loadUsers();
+  }, [loadUsers]);
 
   const handleEditUser = (user: User) => {
     setSelectedUser(user);

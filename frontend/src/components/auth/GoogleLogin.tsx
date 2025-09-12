@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { useAppDispatch, useAppSelector } from '../../hooks/redux';
 import { googleLogin } from '../../store/slices/authSlice';
 
@@ -43,7 +43,7 @@ const GoogleLogin: React.FC<GoogleLoginProps> = ({ onSuccess, onError, disabled 
 
   const GOOGLE_CLIENT_ID = process.env.REACT_APP_GOOGLE_CLIENT_ID || '';
 
-  const handleCredentialResponse = async (response: { credential: string }) => {
+  const handleCredentialResponse = useCallback(async (response: { credential: string }) => {
     try {
       const result = await dispatch(googleLogin({ id_token: response.credential }));
       
@@ -56,7 +56,7 @@ const GoogleLogin: React.FC<GoogleLoginProps> = ({ onSuccess, onError, disabled 
     } catch (error: any) {
       onError?.(error.message || 'Google login failed');
     }
-  };
+  }, [dispatch, onSuccess, onError]);
 
   useEffect(() => {
     if (!GOOGLE_CLIENT_ID) {
@@ -101,7 +101,7 @@ const GoogleLogin: React.FC<GoogleLoginProps> = ({ onSuccess, onError, disabled 
         document.head.removeChild(script);
       };
     }
-  }, [GOOGLE_CLIENT_ID]);
+  }, [GOOGLE_CLIENT_ID, handleCredentialResponse]);
 
   if (!GOOGLE_CLIENT_ID) {
     return (

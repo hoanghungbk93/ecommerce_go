@@ -1,11 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useAppDispatch, useAppSelector } from '../../hooks/redux';
+import { useAppSelector } from '../../hooks/redux';
 import { userAPI } from '../../services/api';
-import { User } from '../../types';
-
 const Profile: React.FC = () => {
   const { user } = useAppSelector((state) => state.auth);
-  const dispatch = useAppDispatch();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [isEditing, setIsEditing] = useState(false);
@@ -68,7 +65,7 @@ const Profile: React.FC = () => {
     setSuccessMessage('');
     
     try {
-      const response = await userAPI.updateProfile({
+      await userAPI.updateProfile({
         first_name: formData.first_name,
         last_name: formData.last_name,
         phone: formData.phone || undefined,

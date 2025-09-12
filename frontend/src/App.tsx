@@ -14,8 +14,6 @@ import Profile from './pages/user/Profile';
 import Orders from './pages/orders/Orders';
 import OrderDetail from './pages/orders/OrderDetail';
 import AdminDashboard from './pages/admin/Dashboard';
-import Partners from './pages/admin/Partners';
-import AddPartner from './pages/admin/AddPartner';
 import PrivateRoute from './components/common/PrivateRoute';
 import AdminRoute from './components/common/AdminRoute';
 

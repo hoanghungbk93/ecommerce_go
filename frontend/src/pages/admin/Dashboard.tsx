@@ -1,8 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../../store';
-import { fetchProducts, deleteProduct } from '../../store/slices/productsSlice';
-import { fetchOrders } from '../../store/slices/ordersSlice';
+import { deleteProduct } from '../../store/slices/productsSlice';
 import { fetchCategories, deleteCategory } from '../../store/slices/categoriesSlice';
 import { useNavigate, Routes, Route, useLocation } from 'react-router-dom';
 import ProductModal from '../../components/admin/ProductModal';
@@ -28,9 +27,6 @@ const AdminDashboard: React.FC = () => {
   const [productModal, setProductModal] = useState<{ isOpen: boolean; product: Product | null }>({ isOpen: false, product: null });
   const [categoryModal, setCategoryModal] = useState<{ isOpen: boolean; category: Category | null }>({ isOpen: false, category: null });
   
-  // Pending products state
-  const [pendingProducts, setPendingProducts] = useState<Product[]>([]);
-  const [pendingProductsLoading, setPendingProductsLoading] = useState(false);
   
   // Admin orders state
   const [adminOrders, setAdminOrders] = useState<any[]>([]);
@@ -41,6 +37,55 @@ const AdminDashboard: React.FC = () => {
   const [totalPages, setTotalPages] = useState(1);
   const [totalProducts, setTotalProducts] = useState(0);
   const productsPerPage = 50;
+
+  // Load products with pagination
+  const loadProducts = useCallback(async (page: number) => {
+    try {
+      const response = await productsAPI.getProducts({ 
+        page, 
+        limit: productsPerPage 
+      });
+      
+      // Update Redux store with current page products
+      dispatch({
+        type: 'products/fetchProducts/fulfilled',
+        payload: response.data.products || []
+      });
+      
+      // Update pagination state
+      setCurrentPage(page);
+      setTotalProducts(response.data.pagination?.total || response.data.products?.length || 0);
+      setTotalPages(Math.ceil((response.data.pagination?.total || response.data.products?.length || 0) / productsPerPage));
+    } catch (error) {
+      console.error('Error loading products:', error);
+    }
+  }, [dispatch, productsPerPage]);
+
+  // Load all orders for admin
+  const loadAdminOrders = useCallback(async () => {
+    try {
+      console.log('🔄 Starting to load admin orders...');
+      setOrdersLoading(true);
+      const response = await ordersAPI.getAllOrders();
+      console.log('📦 Raw API response:', response);
+      console.log('📦 Response data:', response.data);
+      console.log('📦 Response data structure:', typeof response.data, Object.keys(response.data || {}));
+      
+      // Extract orders array from response data structure: { orders: [...], pagination: {...} }
+      const ordersData = response.data?.orders || [];
+      console.log('📦 Extracted orders array:', ordersData);
+      console.log('📦 Is ordersData an array?', Array.isArray(ordersData));
+      console.log('📦 Number of orders:', ordersData.length);
+      setAdminOrders(ordersData);
+    } catch (error: any) {
+      console.error('❌ Error loading admin orders:', error);
+      console.error('❌ Error details:', error.response || error.message);
+      setAdminOrders([]);
+    } finally {
+      setOrdersLoading(false);
+      console.log('✅ Finished loading admin orders');
+    }
+  }, []);
 
   useEffect(() => {
     // Check if user is admin
@@ -53,7 +98,7 @@ const AdminDashboard: React.FC = () => {
     console.log('🚀 Loading admin orders on component mount...');
     loadAdminOrders(); // Load all orders for admin
     dispatch(fetchCategories());
-  }, [dispatch, user, navigate]);
+  }, [dispatch, user, navigate, loadProducts, loadAdminOrders]);
 
   useEffect(() => {
     // Set active tab based on current route
@@ -86,7 +131,6 @@ const AdminDashboard: React.FC = () => {
 
   // Calculate stats - ensure ordersArray is an array
   const orders = Array.isArray(ordersArray) ? ordersArray : [];
-  const currentProductsCount = products.length;
   const totalOrders = orders.length;
   const totalRevenue = orders.reduce((sum, order) => sum + order.total, 0);
   const lowStockProducts = products.filter(p => p.stock < 10).length;
@@ -116,54 +160,6 @@ const AdminDashboard: React.FC = () => {
     }
   };
 
-  // Load products with pagination
-  const loadProducts = async (page: number) => {
-    try {
-      const response = await productsAPI.getProducts({ 
-        page, 
-        limit: productsPerPage 
-      });
-      
-      // Update Redux store with current page products
-      dispatch({
-        type: 'products/fetchProducts/fulfilled',
-        payload: response.data.products || []
-      });
-      
-      // Update pagination state
-      setCurrentPage(page);
-      setTotalProducts(response.data.pagination?.total || response.data.products?.length || 0);
-      setTotalPages(Math.ceil((response.data.pagination?.total || response.data.products?.length || 0) / productsPerPage));
-    } catch (error) {
-      console.error('Error loading products:', error);
-    }
-  };
-
-  // Load all orders for admin
-  const loadAdminOrders = async () => {
-    try {
-      console.log('🔄 Starting to load admin orders...');
-      setOrdersLoading(true);
-      const response = await ordersAPI.getAllOrders();
-      console.log('📦 Raw API response:', response);
-      console.log('📦 Response data:', response.data);
-      console.log('📦 Response data structure:', typeof response.data, Object.keys(response.data || {}));
-      
-      // Extract orders array from response data structure: { orders: [...], pagination: {...} }
-      const ordersData = response.data?.orders || [];
-      console.log('📦 Extracted orders array:', ordersData);
-      console.log('📦 Is ordersData an array?', Array.isArray(ordersData));
-      console.log('📦 Number of orders:', ordersData.length);
-      setAdminOrders(ordersData);
-    } catch (error: any) {
-      console.error('❌ Error loading admin orders:', error);
-      console.error('❌ Error details:', error.response || error.message);
-      setAdminOrders([]);
-    } finally {
-      setOrdersLoading(false);
-      console.log('✅ Finished loading admin orders');
-    }
-  };
 
   // Update order status
   const handleUpdateOrderStatus = async (orderId: number, newStatus: string) => {

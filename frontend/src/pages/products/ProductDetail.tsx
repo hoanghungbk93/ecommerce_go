@@ -4,7 +4,6 @@ import { useDispatch, useSelector } from 'react-redux';
 import { RootState, AppDispatch } from '../../store';
 import { fetchProductById } from '../../store/slices/productsSlice';
 import { addToCart } from '../../store/slices/cartSlice';
-import { Product } from '../../types';
 
 const ProductDetail: React.FC = () => {
   const { id } = useParams<{ id: string }>();
