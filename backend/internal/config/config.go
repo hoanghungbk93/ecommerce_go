@@ -24,12 +24,15 @@ type Config struct {
 	SMTPPassword  string
 	UploadPath    string
 	BaseURL       string
+	LambdaWebhookURL string
+	UseWebhookLambda bool
 }
 
 func Load() *Config {
 	debug, _ := strconv.ParseBool(getEnv("DEBUG", "false"))
 	taxRate, _ := strconv.ParseFloat(getEnv("TAX_RATE", "0.1"), 64)
 	shippingCost, _ := strconv.ParseFloat(getEnv("SHIPPING_COST", "25000"), 64)
+	useWebhookLambda, _ := strconv.ParseBool(getEnv("USE_WEBHOOK_LAMBDA", "false"))
 
 	return &Config{
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://localhost/ecommerce?sslmode=disable"),
@@ -50,6 +53,8 @@ func Load() *Config {
 		SMTPPassword:  getEnv("SMTP_PASSWORD", ""),
 		UploadPath:    getEnv("UPLOAD_PATH", "./uploads"),
 		BaseURL:       getEnv("BASE_URL", "http://localhost:8080"),
+		LambdaWebhookURL: getEnv("LAMBDA_WEBHOOK_URL", ""),
+		UseWebhookLambda: useWebhookLambda,
 	}
 }
 
