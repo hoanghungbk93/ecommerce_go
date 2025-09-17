@@ -1,4 +1,4 @@
-Description: Creates the ECS application resources for ecommerce-app (Free Tier Optimized).
+Description: Creates the ECS application resources for ecommerce-app using EC2 (Free Tier Optimized).
 
 Parameters:
   EnvironmentName:
@@ -15,19 +15,36 @@ Parameters:
     Type: String
 
   CPU:
-    Description: The number of CPU units required by the ECS tasks.
+    Description: The number of CPU units required by the ECS tasks (EC2 uses container-level).
     Type: Number
-    Default: 256
+    Default: 128
 
   Memory:
-    Description: The amount of memory required by the tasks.
+    Description: The amount of memory required by the tasks (EC2 uses container-level).
     Type: Number
-    Default: 512
+    Default: 256
 
   DesiredCount:
     Description: The desired number of service tasks to run.
     Type: Number
     Default: 1
+
+  InstanceType:
+    Description: EC2 instance type for ECS cluster (Free Tier).
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+
+  KeyPairName:
+    Description: EC2 Key Pair for SSH access (optional).
+    Type: String
+    Default: ""
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
 
 Resources:
   # ECS Cluster

@@ -173,7 +173,7 @@ const performValidations = async function (repo, ref, paths) {
         try {
             console.log('Ensuring pinned gitsha template versions in', p, '...');
             let fileData = await githubClient.repos.getContent({
-                owner: 'khanhnd25', repo: repo, ref: ref, path: p
+                owner: 'hoanghungbk93', repo: repo, ref: ref, path: p
             });
 
             // https://developer.github.com/v3/repos/contents/#get-contents
