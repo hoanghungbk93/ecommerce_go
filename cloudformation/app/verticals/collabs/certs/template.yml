@@ -1,0 +1,15 @@
+Description: Configures the collabs vertical's SSL certs
+
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: rscollaborationsdev.com
+      SubjectAlternativeNames:
+        - "*.rscollaborationsdev.com"
+
+Outputs:
+  Certificate:
+    Value: !Ref Certificate
+    Export:
+      Name: collabs-default-certificate

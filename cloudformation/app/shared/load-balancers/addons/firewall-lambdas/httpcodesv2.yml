@@ -1,0 +1,373 @@
+Description: Creates a lambda that automatically updates a Regional WAFv2 IPSet attached to an Application Load Balancer based on http response codes
+
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+
+  LoadBalancerFullName:
+    Type: String
+
+  FunctionName:
+    Type: String
+    Default: ''
+
+  ManualBlockIPSetIpv4:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  AutoBlockIPSetIpv4:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  ManualAllowIPSetIpv4:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  ManualBlockIPSetIpv4Arn:
+    Type: String
+
+  AutoBlockIPSetIpv4Arn:
+    Type: String
+
+  ManualAllowIPSetIpv4Arn:
+    Type: String
+
+# NOTE: IPv6
+# This template has IPv6 resources and references to the IPv6 resources but LTK is not utilizing IPv6 yet
+# The IPv6 resources are stubs for when LTK does support IPv6
+# https://github.com/rewardStyle/aws-waf-lambda started the road to support for IPv6 but it has not been finished
+
+  ManualBlockIPSetIpv6:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  AutoBlockIPSetIpv6:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  ManualAllowIPSetIpv6:
+    Description: The Ref for the resource, containing the resource name, physical ID, and scope, formatted as like name|id|scope
+    Type: String
+
+  ManualBlockIPSetIpv6Arn:
+    Type: String
+
+  AutoBlockIPSetIpv6Arn:
+    Type: String
+
+  ManualAllowIPSetIpv6Arn:
+    Type: String
+
+  AccessLogBucket:
+    Type: String
+    Description: >
+      The s3 bucket where acces logs are stored.
+
+  AccessLogKeyPrefix:
+    Type: String
+    Description: >
+      The s3 bucket sub-path that contains only access log files.
+
+  BlockSeconds:
+    Type: Number
+    Description: >
+      How long an abusive user is blocked.
+
+  BadResponseCodesRegex:
+    Type: String
+    Description: >
+      A python regular expression used to select access responses that indicate abusive behavior.
+      This string is used in python like: re.compile(string).match(example_http_code_str)
+      The safe bet: "(?:4..)"
+
+  BadResponseCodesMaxPerMinute:
+    Type: Number
+    Description: >
+      The maximum number of bad requests per minute an origin IP can issue before they are considered abusive and blocked.
+    MinValue: 1
+
+
+Mappings:
+
+  Inventory:
+    AwsWafLambda:
+      GitSha: 53413ccdab20b41f41d6812dd16cb930376a5dd1
+
+
+Conditions:
+  HasFunctionName: !Not [!Equals [!Ref FunctionName, '']]
+
+
+Resources:
+
+  ALBAutoBlockFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - !Sub arn:aws:s3:::${AccessLogBucket}
+                  - !Sub arn:aws:s3:::${AccessLogBucket}/${AccessLogKeyPrefix}logs/AWSLogs/*
+        - PolicyName: S3WriteToAbusersJson
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                  - s3:Put*
+                Resource:
+                  - !Sub arn:aws:s3:::${AccessLogBucket}/${AccessLogKeyPrefix}firewall/abusers.json
+                  - !Sub arn:aws:s3:::${AccessLogBucket}/${AccessLogKeyPrefix}firewall/whitelist.json
+        - PolicyName: AutoBlockIPSetAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - wafv2:Get*
+                  - wafv2:UpdateIPSet
+                Resource:
+                  - !Ref AutoBlockIPSetIpv4Arn
+                  - !Ref AutoBlockIPSetIpv6Arn
+        - PolicyName: ManualBlockIPSetAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - wafv2:Get*
+                Resource:
+                  - !Ref ManualBlockIPSetIpv4Arn
+                  - !Ref ManualBlockIPSetIpv6Arn
+        - PolicyName: ManualAllowIPSetAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - wafv2:Get*
+                Resource:
+                  - !Ref ManualAllowIPSetIpv4Arn
+                  - !Ref ManualAllowIPSetIpv6Arn
+        - PolicyName: CloudWatchLogsSuperAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:*
+                Resource:
+                  - "*"
+        - PolicyName: CloudWatchSuperAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource:
+                  - "*"
+
+  ALBAutoBlockFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !If
+        - HasFunctionName
+        - !Ref FunctionName
+        - !Ref AWS::NoValue
+      Handler: lambda_function.lambda_handler_v2
+      Role: !GetAtt ALBAutoBlockFunctionRole.Arn
+      Code:
+        S3Bucket: ltk-lambda-artifacts.liketoknow.it
+        S3Key: !Sub
+          - aws-waf-lambda/${GitSha}.zip
+          - GitSha: !FindInMap [Inventory, AwsWafLambda, GitSha]
+      Runtime: python3.7
+      MemorySize: 512
+      Timeout: 300
+      Environment:
+        Variables:
+          BUCKET: !Ref AccessLogBucket
+          STATE_PREFIX: !Sub ${AccessLogKeyPrefix}firewall/
+          IP_SET_ID_MANUAL_BLOCK: !Ref ManualBlockIPSetIpv4
+          IP_SET_ID_IP_V6_MANUAL_BLOCK: !Ref ManualBlockIPSetIpv6
+          IP_SET_ID_AUTO_BLOCK: !Ref AutoBlockIPSetIpv4
+          IP_SET_ID_IP_V6_AUTO_BLOCK: !Ref AutoBlockIPSetIpv6
+          IP_SET_ID_MANUAL_ALLOW: !Ref ManualAllowIPSetIpv4
+          IP_SET_ID_IP_V6_MANUAL_ALLOW: !Ref ManualAllowIPSetIpv6
+          BLACKLIST_BLOCK_PERIOD: !Ref BlockSeconds
+          REQUEST_PER_MINUTE_LIMIT: !Ref BadResponseCodesMaxPerMinute
+          BLOCK_HTTP_CODES_REGEX: !Ref BadResponseCodesRegex
+          MAX_IPSET_CHANGE_SIZE: 1000
+          MAX_IPSET_SIZE: 10000
+          NUM_WAF_API_RETRIES: 3
+          ENDPOINT_TYPE: ALB
+          ENDPOINT_METRIC_DIMENSION_VALUE: !Ref LoadBalancerFullName
+          NAT_IPS:
+            Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:nat-gateway:public-ips
+
+
+  # If we ever wanted to run this using a timed approach to ensure timely whitelisting:
+
+  # LambdaScheduleRule:
+  #   Type: AWS::Events::Rule
+  #   Properties:
+  #     Description: !Sub
+  #       - Schedule for ${Arn}
+  #       - Arn: !GetAtt ALBAutoBlockFunction.Arn
+  #     ScheduleExpression: "rate(15 minutes)"
+  #     State: ENABLED
+  #     Targets:
+  #       - Arn: !GetAtt ALBAutoBlockFunction.Arn
+  #         Id: !Sub
+  #           - ${FunctionName}-schedule-rule # up to 64 characters
+  #           - FunctionName: !Ref ALBAutoBlockFunction
+
+  #  LambdaSchedulePermission:
+  #   Type: AWS::Lambda::Permission
+  #   Properties:
+  #     FunctionName: !Ref ALBAutoBlockFunction
+  #     SourceArn: !GetAtt LambdaScheduleRule.Arn
+  #     Action: lambda:InvokeFunction
+  #     Principal: events.amazonaws.com
+
+
+  # Allow the S3 bucket to notify the lambda when new files are created:
+
+
+  S3LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ALBAutoBlockFunction.Arn
+      Action: lambda:*
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+
+  S3LambdaAssociationFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowS3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                Resource:
+                  - !Sub arn:aws:s3:::${AccessLogBucket}
+
+  # Boto3 Docs:
+  # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/s3.html#S3.BucketNotification.lambda_function_configurations
+
+  SS3LambdaAssociationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: !Sub >
+        Creates a file created notification hook from ${AccessLogBucket} to ${ALBAutoBlockFunction}
+      Role: !GetAtt S3LambdaAssociationFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      MemorySize: 128
+      ReservedConcurrentExecutions: 1
+      Timeout: 900
+      Code:
+        ZipFile: |
+          # v0.0.2
+          import os
+          import uuid
+          import json
+          import boto3
+          import cfnresponse
+
+          p = lambda **x: print(json.dumps(x,default=str))
+          S3_CLIENT = boto3.resource('s3')
+
+          def get_physical_resource_id(event):
+              pri = event.get('physical_resource_id')
+              if not pri:
+                  pri = str(uuid.uuid4())
+              return pri
+
+          def associate(BucketName, KeyPrefix, LambdaArn):
+              notificationConfiguration = {
+                  'LambdaFunctionConfigurations': [{
+                      'LambdaFunctionArn': LambdaArn,
+                      'Events': [ 's3:ObjectCreated:*' ],
+                      'Filter': { 'Key': { 'FilterRules': [{ 'Name': 'prefix', 'Value': KeyPrefix }] } }
+                  }]
+              }
+              S3_CLIENT.BucketNotification(BucketName).put(
+                  NotificationConfiguration=notificationConfiguration,
+              )
+
+          def event_handler(event, response):
+              args = ['BucketName', 'KeyPrefix', 'LambdaArn']
+              kwargs = { x:event['ResourceProperties'][x] for x in args }
+
+              response.update(kwargs)
+
+              if event['RequestType'] in ["Create", "Update"]:
+                  associate(**kwargs)
+
+          def lambda_handler(event, context):
+              p(event=event)
+              pri = get_physical_resource_id(event)
+              response = {}
+              try:
+                  event_handler(event, response)
+              except Exception as err:
+                  response["Error"] = err.__str__()
+                  cfnresponse.send(
+                      event, context,
+                      cfnresponse.FAILED,
+                      response,
+                      pri,
+                  )
+                  raise
+
+              cfnresponse.send(
+                  event, context,
+                  cfnresponse.SUCCESS,
+                  response,
+                  pri,
+              )
+
+  S3LambdaAssociation:
+    Type: Custom::S3LambdaAssociation
+    DependsOn:
+      - SS3LambdaAssociationFunction
+    Properties:
+      ServiceToken: !GetAtt SS3LambdaAssociationFunction.Arn
+      BucketName: !Ref AccessLogBucket
+      KeyPrefix: !Sub ${AccessLogKeyPrefix}logs/AWSLogs/
+      LambdaArn: !GetAtt ALBAutoBlockFunction.Arn

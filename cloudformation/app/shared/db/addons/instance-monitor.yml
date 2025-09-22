@@ -1,0 +1,162 @@
+Description: Creates an RDS instance monitor.
+
+Parameters:
+  Instance:
+    Description: The RDS instance DBInstanceIdentifier
+    Type: String
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the RDS instance. This should be lower
+      cased as the vertical name is used in the naming convention of various resources.
+    AllowedPattern: "[a-z0-9-]+"
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+Conditions:
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  StatusLambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowRdsStatusReadAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                  - cloudwatch:PutMetricData
+                Resource:
+                  - "*"
+
+  StatusLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: !Sub Monitors rds instance ${Instance} for error statuses.
+      Role: !GetAtt StatusLambdaFunctionRole.Arn
+      Handler: index.handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 275
+      Environment:
+        Variables:
+          DBInstanceIdentifier: !Ref Instance
+      Code:
+        ZipFile: |
+          import boto3
+          import os
+          from datetime import datetime, timedelta
+          id = os.environ['DBInstanceIdentifier']
+          STATUS_MAP = {
+          'pass':{x:True for x in 'available,backing-up,backtracking,configuring-enhanced-monitoring,creating,deleting,maintenance,modifying,moving-to-vpc,rebooting,renaming,resetting-master-credentials,starting,stopping,stopped,storage-optimization,upgrading'.split(',')},
+          'fail':{x:True for x in 'failed,inaccessible-encryption-credentials,incompatible-credentials,incompatible-network,incompatible-option-group,incompatible-parameters,incompatible-restore,restore-error,storage-full'.split(',')},
+          }
+          def timestamp():
+            t = datetime.now()
+            return t - timedelta(minutes=t.minute%5, seconds=t.second,microseconds=t.microsecond)
+          def handler(*args):
+            resp = boto3.client('rds').describe_db_instances(DBInstanceIdentifier=id)['DBInstances']
+            assert len(resp) == 1
+            status = resp[0]['DBInstanceStatus']
+            if STATUS_MAP['pass'].get(status):
+              value = 0
+            else:
+              value = 1
+              if not STATUS_MAP['fail'].get(status):
+                print(f"Unrecognized status '{status}', assuming it is an error status")
+            boto3.client('cloudwatch').put_metric_data(
+              Namespace='CUSTOM/RDS',
+              MetricData=[{
+                'MetricName': 'ErrorStatusCount',
+                'Timestamp': timestamp(),
+                'Value': value,
+                'Dimensions':[{
+                  'Name': 'DBInstanceIdentifier',
+                  'Value': id,
+                  }],
+              }]
+            )
+      Tags:
+        - Key: Name
+          Value: !Sub ${Instance}-RdsErrorStatusMonitor
+
+  StatusLambdaScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join
+        - " "
+        - - "Schedule for Lambda Function"
+          - !GetAtt StatusLambdaFunction.Arn
+      ScheduleExpression: "rate(5 minutes)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt StatusLambdaFunction.Arn
+          Id: !Select [2, !Split [/, !Ref 'AWS::StackId']]
+
+  StatusLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StatusLambdaFunction
+      SourceArn: !GetAtt StatusLambdaScheduleRule.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  StatusAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub "critical: rds: ${Instance} instance is in an unhealthy state."
+      Namespace: CUSTOM/RDS
+      MetricName: ErrorStatusCount
+      Statistic: Minimum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance

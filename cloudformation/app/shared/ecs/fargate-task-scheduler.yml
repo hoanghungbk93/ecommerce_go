@@ -1,0 +1,347 @@
+---
+Description: >
+  Schedule the execution of ECS Fargate tasks with Lambdas and CloudWatch
+  events.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Type: String
+    AllowedPattern: "^[a-z]+$"
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ClusterName:
+    Description: >
+      The name of the cluster this task should run in.
+    Type: String
+
+  TaskDefinitionArn:
+    Description: >
+      The ARN of the task.
+    Type: String
+
+  TaskRoleArn:
+    Description: >
+      The ARN of the task's role.
+    Type: String
+
+  TaskExecutionRoleArn:
+    Description: >
+      The ARN of the task's execution role.
+    Type: String
+
+  ScheduleExpression:
+    Type: String
+    Description: >
+      The schedule or rate (frequency) that determines when CloudWatch Events
+      runs the rule.  If the value is emtpy the schedule rule is not created
+    Default: ""
+
+  CommandOverrides:
+    Type: CommaDelimitedList
+    Description: >
+      A list of commands to run using the task definition. Leaving this blank
+      will run the default command of the task.
+    Default: ""
+  
+  SetEnvFromEventInput:
+    Type: String
+    Description: >
+      Allows use of key value pairs from the input fields of cloudwatch events
+      that trigger the Fargate task. The event input should be escaped JSON. Keys
+      should be strings. Values can be either ints, strings or boolean types. These
+      keys and values will be set as enviroment varaiables in the fargate container.
+      Please try to avoid collision with baked in LTK Environment variables.
+    AllowedValues: ["True", "False"]
+    Default: "False"
+
+  RuleState:
+    Description: The state of the rule.
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: ENABLED
+
+  LambdaErrorsTooHighUrgency:
+    Description: The urgency to use on high lambda error count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  LambdaErrorsThreshold:
+    Description: The maximum allowed errors before sending alerts to Cloudwatch.
+    Type: Number
+    Default: 0
+  
+  ResourceName:
+    Description: The resource name to use in AlarmName string.
+    Type: String
+    Default: lambda
+
+  PeriodInSeconds:
+    Description: The total amount of time is seconds for the aws::cloudwatch::alarm period param.
+    Type: Number
+    Default: 60
+
+Conditions:
+  HasTaskCronRule: !Not [!Equals [!Ref ScheduleExpression, ""]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  TaskSchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: !Sub
+            - ${TaskName}-SchedulerAccess
+            - TaskName: !Select
+                - 0
+                - Fn::Split:
+                    - ":"
+                    - Fn::Select:
+                        [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: "*"
+
+  TaskCronRule:
+    Type: AWS::Events::Rule
+    Condition: HasTaskCronRule
+    Properties:
+      Description: !Sub
+        - Scheduled CloudWatch Event rule for ${TaskName}
+        - TaskName: !Select
+            - 0
+            - Fn::Split:
+                - ":"
+                - Fn::Select: [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !Ref RuleState
+      Targets:
+        - Id: !Sub
+            - ${TaskName}-TaskTriggerRule
+            - TaskName: !Select
+                - 0
+                - Fn::Split:
+                    - ":"
+                    - Fn::Select:
+                        [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+          Arn: !GetAtt TaskTriggerFunction.Arn
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Condition: HasTaskCronRule
+    Properties:
+      FunctionName: !Ref TaskTriggerFunction
+      SourceArn: !GetAtt TaskCronRule.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  TaskTriggerFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub
+            - ${TaskName}-TriggerPolicy
+            - TaskName: !Select
+                - 0
+                - Fn::Split:
+                    - ":"
+                    - Fn::Select:
+                        [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource:
+                  - !Ref TaskDefinitionArn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Ref TaskExecutionRoleArn
+                  - !Ref TaskRoleArn
+
+  TaskTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt TaskTriggerFunctionRole.Arn
+      Description: !Sub
+        - Task executor for ${TaskName}
+        - TaskName: !Select
+            - 0
+            - Fn::Split:
+                - ":"
+                - Fn::Select: [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 30
+      Code:
+        ZipFile: !Sub
+          - |
+            import boto3
+            import csv
+            ecs = boto3.client('ecs')
+            def lambda_handler(event, context):
+              commandOverrides = list(map(
+                lambda x: x.strip(),
+                [row for row in csv.reader(['${CommandOverrides}'])][0]
+              ))
+
+              if len(commandOverrides) == 0:
+                commandOverrides = [None]
+
+              runningTaskArns = [run_task(cmd, event)
+                               for cmd in commandOverrides]
+
+              clusterName = '${ClusterName}'
+              region = '${AWS::Region}'
+              runningTaskLinks = list(map((lambda arn:
+                                           'https://console.aws.amazon.com/ecs/home'
+                                           '?region=ap-southeast-1'
+                                           f'#/clusters/{clusterName}/tasks/'
+                                           f'{arn.split("/")[-1]}/details'
+                                           ), runningTaskArns))
+              print(runningTaskLinks)
+              return runningTaskLinks
+
+            def run_task(cmd=None,event=None):
+              overrides = {}
+              event_overrides = ${SetEnvFromEventInput}
+              if event_overrides and not cmd:
+                environment_values = []
+                for key, value in event.items():
+                  if isinstance(key, str) and isinstance(value, (str, int, bool)):
+                    key_dict = {"name": key, "value": str(value)}
+                    environment_values.append(key_dict)
+                
+                overrides = {
+                  'containerOverrides': [{
+                    'name': '${ContainerName}',
+                    'environment': environment_values
+                  }]
+                }
+              
+              elif cmd:
+                overrides = {
+                  'containerOverrides': [{
+                    'name': '${ContainerName}',
+                    'command': cmd.split(),
+                  }]
+                }
+
+              try:
+                response = ecs.run_task(
+                  cluster='${ClusterArn}',
+                  taskDefinition='${TaskArn}',
+                  count=1,
+                  launchType='FARGATE',
+                  overrides=overrides,
+                  networkConfiguration={
+                    'awsvpcConfiguration': {
+                      'subnets': '${Subnets}'.split(','),
+                      'securityGroups': [
+                        '${SecurityGroup}',
+                      ],
+                      'assignPublicIp': 'DISABLED'
+                    }
+                  }
+                )
+              except Exception as e:
+                print(e)
+                raise e
+              print(response)
+              return response['tasks'][0]['taskArn']
+          - Subnets:
+              Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+            SecurityGroup:
+              Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+            ClusterArn: !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:cluster/${ClusterName}
+            TaskArn: !Ref TaskDefinitionArn
+            CommandOverrides: !Join
+              - ","
+              - !Ref CommandOverrides
+            ExectionRoleArn: !GetAtt TaskSchedulerRole.Arn
+            ContainerName: !Select
+              - 0
+              - !Split [":", !Select [1, !Split ["/", !Ref TaskDefinitionArn]]]
+      Tags:
+        - Key: Name
+          Value: !Sub
+            - ${TaskName}-ScheduledTriggerFunction
+            - TaskName: !Select
+                - 0
+                - Fn::Split:
+                    - ":"
+                    - Fn::Select:
+                        [1, "Fn::Split": ["/", !Ref TaskDefinitionArn]]
+
+  LambdaErrorsTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-${ResourceName}-errors-too-high
+      AlarmDescription: !Sub "${LambdaErrorsTooHighUrgency}: lambda: ${EnvironmentName}-${ClusterName}-${ResourceName} errors are high."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: !Ref PeriodInSeconds
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: !Ref LambdaErrorsThreshold
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${LambdaErrorsTooHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${LambdaErrorsTooHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TaskTriggerFunction
+
+Outputs:
+
+    TaskTriggerFunctionArn:
+      Description: The ARN of the task trigger function
+      Value: !GetAtt TaskTriggerFunction.Arn

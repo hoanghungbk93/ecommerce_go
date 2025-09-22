@@ -1,0 +1,311 @@
+Description: Creates s3 storage to be used with an eventbus.
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  BusName:
+    Description: Values is just used on the Name tag of an s3 bucket
+    Type: String
+    AllowedPattern: "^[a-z0-9][-a-z0-9]*$" # note I am specifically not allowing a '.' character because it cannot be used in an export name and I don't want to use a string-replace function which may create odd collisions
+
+Conditions:
+  #
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Resources:
+  #
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Logs:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Status: Enabled
+            ExpirationInDays: 365
+            Prefix: s3-eventstorage-access-logs/
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: Glacier
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${BusName}-logs
+        - Key: BusName
+          Value: !Ref BusName
+        - Key: UsageType
+          Value: logs
+
+  Storage:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs
+        LogFilePrefix: s3-eventstorage-access-logs/
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            ExpirationInDays: 1
+            Prefix: events/expiredays=1/
+          - Status: Enabled
+            ExpirationInDays: 1
+            Prefix: errorevents/expiredays=1/
+          - Status: Enabled
+            ExpirationInDays: 2
+            Prefix: events/expiredays=2/
+          - Status: Enabled
+            ExpirationInDays: 2
+            Prefix: errorevents/expiredays=2/
+          - Status: Enabled
+            ExpirationInDays: 3
+            Prefix: events/expiredays=3/
+          - Status: Enabled
+            ExpirationInDays: 3
+            Prefix: errorevents/expiredays=3/
+          - Status: Enabled
+            ExpirationInDays: 4
+            Prefix: events/expiredays=4/
+          - Status: Enabled
+            ExpirationInDays: 4
+            Prefix: errorevents/expiredays=4/
+          - Status: Enabled
+            ExpirationInDays: 5
+            Prefix: events/expiredays=5/
+          - Status: Enabled
+            ExpirationInDays: 5
+            Prefix: errorevents/expiredays=5/
+          - Status: Enabled
+            ExpirationInDays: 6
+            Prefix: events/expiredays=6/
+          - Status: Enabled
+            ExpirationInDays: 6
+            Prefix: errorevents/expiredays=6/
+          - Status: Enabled
+            ExpirationInDays: 7
+            Prefix: events/expiredays=7/
+          - Status: Enabled
+            ExpirationInDays: 7
+            Prefix: errorevents/expiredays=7/
+          - Status: Enabled
+            ExpirationInDays: 8
+            Prefix: events/expiredays=8/
+          - Status: Enabled
+            ExpirationInDays: 8
+            Prefix: errorevents/expiredays=8/
+          - Status: Enabled
+            ExpirationInDays: 9
+            Prefix: events/expiredays=9/
+          - Status: Enabled
+            ExpirationInDays: 9
+            Prefix: errorevents/expiredays=9/
+          - Status: Enabled
+            ExpirationInDays: 10
+            Prefix: events/expiredays=10/
+          - Status: Enabled
+            ExpirationInDays: 10
+            Prefix: errorevents/expiredays=10/
+          - Status: Enabled
+            ExpirationInDays: 11
+            Prefix: events/expiredays=11/
+          - Status: Enabled
+            ExpirationInDays: 11
+            Prefix: errorevents/expiredays=11/
+          - Status: Enabled
+            ExpirationInDays: 12
+            Prefix: events/expiredays=12/
+          - Status: Enabled
+            ExpirationInDays: 12
+            Prefix: errorevents/expiredays=12/
+          - Status: Enabled
+            ExpirationInDays: 13
+            Prefix: events/expiredays=13/
+          - Status: Enabled
+            ExpirationInDays: 13
+            Prefix: errorevents/expiredays=13/
+          - Status: Enabled
+            ExpirationInDays: 14
+            Prefix: events/expiredays=14/
+          - Status: Enabled
+            ExpirationInDays: 14
+            Prefix: errorevents/expiredays=14/
+          - Status: Enabled
+            ExpirationInDays: 15
+            Prefix: events/expiredays=15/
+          - Status: Enabled
+            ExpirationInDays: 15
+            Prefix: errorevents/expiredays=15/
+          - Status: Enabled
+            ExpirationInDays: 16
+            Prefix: events/expiredays=16/
+          - Status: Enabled
+            ExpirationInDays: 16
+            Prefix: errorevents/expiredays=16/
+          - Status: Enabled
+            ExpirationInDays: 17
+            Prefix: events/expiredays=17/
+          - Status: Enabled
+            ExpirationInDays: 17
+            Prefix: errorevents/expiredays=17/
+          - Status: Enabled
+            ExpirationInDays: 18
+            Prefix: events/expiredays=18/
+          - Status: Enabled
+            ExpirationInDays: 18
+            Prefix: errorevents/expiredays=18/
+          - Status: Enabled
+            ExpirationInDays: 19
+            Prefix: events/expiredays=19/
+          - Status: Enabled
+            ExpirationInDays: 19
+            Prefix: errorevents/expiredays=19/
+          - Status: Enabled
+            ExpirationInDays: 20
+            Prefix: events/expiredays=20/
+          - Status: Enabled
+            ExpirationInDays: 20
+            Prefix: errorevents/expiredays=20/
+          - Status: Enabled
+            ExpirationInDays: 21
+            Prefix: events/expiredays=21/
+          - Status: Enabled
+            ExpirationInDays: 21
+            Prefix: errorevents/expiredays=21/
+          - Status: Enabled
+            ExpirationInDays: 22
+            Prefix: events/expiredays=22/
+          - Status: Enabled
+            ExpirationInDays: 22
+            Prefix: errorevents/expiredays=22/
+          - Status: Enabled
+            ExpirationInDays: 23
+            Prefix: events/expiredays=23/
+          - Status: Enabled
+            ExpirationInDays: 23
+            Prefix: errorevents/expiredays=23/
+          - Status: Enabled
+            ExpirationInDays: 24
+            Prefix: events/expiredays=24/
+          - Status: Enabled
+            ExpirationInDays: 24
+            Prefix: errorevents/expiredays=24/
+          - Status: Enabled
+            ExpirationInDays: 25
+            Prefix: events/expiredays=25/
+          - Status: Enabled
+            ExpirationInDays: 25
+            Prefix: errorevents/expiredays=25/
+          - Status: Enabled
+            ExpirationInDays: 26
+            Prefix: events/expiredays=26/
+          - Status: Enabled
+            ExpirationInDays: 26
+            Prefix: errorevents/expiredays=26/
+          - Status: Enabled
+            ExpirationInDays: 27
+            Prefix: events/expiredays=27/
+          - Status: Enabled
+            ExpirationInDays: 27
+            Prefix: errorevents/expiredays=27/
+          - Status: Enabled
+            ExpirationInDays: 28
+            Prefix: events/expiredays=28/
+          - Status: Enabled
+            ExpirationInDays: 28
+            Prefix: errorevents/expiredays=28/
+          - Status: Enabled
+            ExpirationInDays: 29
+            Prefix: events/expiredays=29/
+          - Status: Enabled
+            ExpirationInDays: 29
+            Prefix: errorevents/expiredays=29/
+          - Status: Enabled
+            ExpirationInDays: 30
+            Prefix: events/expiredays=30/
+          - Status: Enabled
+            ExpirationInDays: 30
+            Prefix: errorevents/expiredays=30/
+      AccessControl: LogDeliveryWrite
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${BusName}-eventstorage
+        - Key: BusName
+          Value: !Ref BusName
+        - Key: UsageType
+          Value: storage
+
+  #
+  # SSM Outputs
+  #
+
+  OutputParameterLogsBucketName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${Namespace}/event-bus/${BusName}/logs/bucket-name
+      Value: !Ref Logs
+
+  OutputParameterStorageBucketName:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${Namespace}/event-bus/${BusName}/storage/bucket-name
+      Value: !Ref Storage
+
+Outputs:
+  #
+  LogsBucketName:
+    Value: !Ref Logs
+    Export:
+      Name: !Join
+        - ""
+        - - !Sub "${EnvironmentName}"
+          - !If [HasSubEnvironment, !Sub "-${SubEnvironmentName}", ""]
+          - !Sub ":event-bus:${BusName}:logs:bucket-name"
+
+  StorageBucketName:
+    Value: !Ref Storage
+    Export:
+      Name: !Join
+        - ""
+        - - !Sub "${EnvironmentName}"
+          - !If [HasSubEnvironment, !Sub "-${SubEnvironmentName}", ""]
+          - !Sub ":event-bus:${BusName}:storage:bucket-name"

@@ -1,0 +1,17 @@
+[Unit]
+Description=High availability PostgreSQL Cluster
+After=syslog.target network.target
+
+[Service]
+Type=notify
+User=postgres
+Group=postgres
+ExecStart=/usr/local/bin/patroni /etc/patroni/patroni.yml
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=process
+TimeoutSec=30
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

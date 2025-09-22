@@ -1,0 +1,503 @@
+Description: Creates a public MySQL RDS instance.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the MySQL instance. This should be lower
+      cased as the vertical name is used in the naming convention of various resources.
+    AllowedPattern: "[a-z0-9-]+"
+    Type: String
+    Default: ltk
+
+  InstanceName:
+    Description: The name of the RDS instance.
+    Type: String
+
+  DBName:
+    Description: The name of the database on the RDS instance.
+    Type: String
+
+  InstanceClass:
+    Description: The RDS instance class.
+    Type: String
+    Default: db.t4g.micro
+
+  EngineVersion:
+    Description: The version of the database engine.
+    Type: String
+    Default: 8.0
+
+  StorageType:
+    Description: The storage type of the RDS instance.
+    Type: String
+    Default: gp3
+
+  AllocatedStorage:
+    Description: The allocated storage size of the RDS instance (in GB).
+    Type: String
+    Default: 20
+
+  RootPassword:
+    Description: The root user's password.
+    Type: String
+    NoEcho: true
+
+  CPUHighThreshold:
+    Description: The threshold at which the RDS instance's CPU triggers an alarm (percent).
+    Type: Number
+    Default: 80
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the RDS instance's CPU is sampled.
+    Type: Number
+    Default: 300
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 1
+
+  ReadIOPSHighThreshold:
+    Description: The threshold at which the RDS instance's read IOPS triggers an alarm (count/second).
+    Type: Number
+
+  ReadIOPSHighPeriod:
+    Description: The number of seconds over which the RDS instance's read IOPS are sampled.
+    Type: Number
+    Default: 300
+
+  ReadIOPSHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified read IOPS threshold.
+    Type: Number
+    Default: 1
+
+  WriteIOPSHighThreshold:
+    Description: The threshold at which the RDS instance's write IOPS triggers an alarm (count/second).
+    Type: Number
+
+  WriteIOPSHighPeriod:
+    Description: The number of seconds over which the RDS instance's write IOPS are sampled.
+    Type: Number
+    Default: 300
+
+  WriteIOPSHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified write IOPS threshold.
+    Type: Number
+    Default: 1
+
+  UnifiedIOPSHighThreshold:
+    Description: >
+      The number of unified read and write IOPS at which to trigger an alarm.
+    Default: 0
+    AllowedPattern: "[0-9]+"
+    Type: String
+
+  ReadLatencyHighThreshold:
+    Description: The threshold at which the RDS instance's read latency triggers an alarm (milliseconds).
+    Type: Number
+
+  ReadLatencyHighPeriod:
+    Description: The number of seconds over which the RDS instance's read latency is sampled.
+    Type: Number
+    Default: 300
+
+  ReadLatencyHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified read latency threshold.
+    Type: Number
+    Default: 1
+
+  WriteLatencyHighThreshold:
+    Description: The threshold at which the RDS instance's write latency triggers an alarm (milliseconds).
+    Type: Number
+
+  WriteLatencyHighPeriod:
+    Description: The number of seconds over which the RDS instance's write latency is sampled.
+    Type: Number
+    Default: 300
+
+  WriteLatencyHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified write latency threshold.
+    Type: Number
+    Default: 1
+
+  StorageLowThreshold:
+    Description: The threshold at which the RDS instance's storage triggers an alarm (gigabytes).
+    Type: Number
+
+  StorageLowPeriod:
+    Description: The number of seconds over which the RDS instance's storage is sampled.
+    Type: Number
+    Default: 300
+
+  StorageLowEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified low storage threshold.
+    Type: Number
+    Default: 1
+
+  MonitoringIntervalInSeconds:
+    Description: >
+      The interval, in seconds, between points when Enhanced Monitoring metrics
+      are collected for the DB instance. To disable collecting Enhanced
+      Monitoring metrics, specify 0. The default is 0.
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 5, 10, 15, 30, 60]
+
+  DBSnapshotIdentifier:
+    Type: String
+    Default: ''
+    Description: >
+      The identifier for the DB cluster snapshot from which you want to restore.
+
+  VpcSecurityGroups:
+    Description: In your cloudformation template create your Database specific Security groups and provide the list of Security Group ID's for the database.
+    Type: CommaDelimitedList
+
+  SecurityAndArchitectureReviewApproved:
+    Description: Obtain review and approval from Security and architecture before this is implemented.
+    Type: String
+    AllowedValues: [true]
+
+  AuditDb:
+    Description: This will enable auditing in the database with option MARIADB_AUDIT_PLUGIN
+    Type: String
+    Default: true
+    AllowedValues: [true, false]
+
+Conditions:
+
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasEnhancedMonitoring: !Not [!Equals [!Ref MonitoringIntervalInSeconds, 0]]
+  HasDBSnapshotIdentifier: !And
+    - !Not [!Equals [!Ref EnvironmentName, prod]]
+    - !Not [!Equals [!Ref DBSnapshotIdentifier, '']]
+  HasAuditDbEnabled: !Equals [!Ref AuditDb, "true"]
+
+Resources:
+
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnet group for the ${EnvironmentName}-${InstanceName} RDS instance.
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+      Tags:
+        - Key: Vertical
+          Value: LTK
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  ParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub Parameter group for the ${EnvironmentName}-${InstanceName} RDS instance.
+      Family: !Sub MySQL${EngineVersion}
+      Parameters:
+        require_secure_transport: 1
+        performance_schema: 1
+        general_log: 1
+        slow_query_log: 1
+        log_bin_trust_function_creators: 1
+        read_only: "{TrueIfReplica}"
+        innodb_buffer_pool_dump_at_shutdown: 1
+        innodb_buffer_pool_load_at_startup: 1
+        performance_schema_accounts_size: -1
+        performance_schema_digests_size: -1
+        performance_schema_events_statements_history_long_size: -1
+        performance_schema_hosts_size: -1
+        collation_server: utf8mb4_unicode_ci
+        collation_connection: utf8mb4_unicode_ci
+        character_set_server: utf8mb4
+        character_set_database: utf8mb4
+        character_set_filesystem: utf8mb4
+        character_set_client: utf8mb4
+        character_set_connection: utf8mb4
+        character_set_results: utf8mb4
+      Tags:
+        - Key: Vertical
+          Value: LTK
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  OptionGroup:
+    Type: AWS::RDS::OptionGroup
+    Condition: HasAuditDbEnabled
+    Properties:
+      EngineName: MySQL
+      MajorEngineVersion: !Ref EngineVersion
+      OptionConfigurations:
+        - OptionName: MARIADB_AUDIT_PLUGIN
+          #OptionSettings: #Leaving this blank as the defaults should be utilized
+      OptionGroupDescription: !Sub Option group for the ${EnvironmentName}-${InstanceName} RDS instance.
+      OptionGroupName: !Sub ${EnvironmentName}-${InstanceName}
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+  Instance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Retain
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-${InstanceName}
+      DBSnapshotIdentifier: !If
+        - HasDBSnapshotIdentifier
+        - !Ref DBSnapshotIdentifier
+        - !Ref AWS::NoValue
+      DBName: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref DBName]
+      DeletionProtection: !If [ EnvIsProd, true, !Ref "AWS::NoValue" ]
+      DBInstanceClass: !Ref InstanceClass
+      Engine: MySQL
+      EngineVersion: !Ref EngineVersion
+      AutoMinorVersionUpgrade: true
+      StorageType: !Ref StorageType
+      AllocatedStorage: !Ref AllocatedStorage
+      DBParameterGroupName: !Ref ParameterGroup
+      DBSubnetGroupName: !Ref SubnetGroup
+      OptionGroupName: !If [HasAuditDbEnabled, !Ref OptionGroup, "AWS:NoValue"]
+      VPCSecurityGroups: !Split
+        - ","
+        - !Join
+          - ","
+          - !Ref VpcSecurityGroups
+      MultiAZ: !If [EnvIsProd, true, false]
+      MasterUsername: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', root]
+      MasterUserPassword: !If [HasDBSnapshotIdentifier, !Ref 'AWS::NoValue', !Ref RootPassword]
+      StorageEncrypted: true
+      PubliclyAccessible: true
+      BackupRetentionPeriod: !If [EnvIsProd, 35, 7]
+      MonitoringInterval: !Ref MonitoringIntervalInSeconds
+      MonitoringRoleArn: !If
+        - HasEnhancedMonitoring
+        - !GetAtt EnhancedMonitoringRole.Arn
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: LTK
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-high-cpu
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance CPU is high.
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  ReadIopsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-high-read-iops
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance read IOPS are high.
+      Namespace: AWS/RDS
+      MetricName: ReadIOPS
+      Unit: Count/Second
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ReadIOPSHighThreshold
+      Period: !Ref ReadIOPSHighPeriod
+      EvaluationPeriods: !Ref ReadIOPSHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  WriteIopsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-high-write-iops
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance write IOPS are high.
+      Namespace: AWS/RDS
+      MetricName: WriteIOPS
+      Unit: Count/Second
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref WriteIOPSHighThreshold
+      Period: !Ref WriteIOPSHighPeriod
+      EvaluationPeriods: !Ref WriteIOPSHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  ReadLatencyHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-high-read-latency
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance read latency is high.
+      Namespace: AWS/RDS
+      MetricName: ReadLatency
+      Unit: Milliseconds
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ReadLatencyHighThreshold
+      Period: !Ref ReadLatencyHighPeriod
+      EvaluationPeriods: !Ref ReadLatencyHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  WriteLatencyHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-high-write-latency
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance write latency is high.
+      Namespace: AWS/RDS
+      MetricName: WriteLatency
+      Unit: Milliseconds
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref WriteLatencyHighThreshold
+      Period: !Ref WriteLatencyHighPeriod
+      EvaluationPeriods: !Ref WriteLatencyHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  StorageLowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${InstanceName}-low-storage
+      AlarmDescription: !Sub Notify when the ${EnvironmentName}-${InstanceName} RDS instance storage is low.
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Unit: Gigabytes
+      Statistic: Average
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Threshold: !Ref StorageLowThreshold
+      Period: !Ref StorageLowPeriod
+      EvaluationPeriods: !Ref StorageLowEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance
+
+  HostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/rds/${InstanceName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Instance.Endpoint.Address
+
+  PortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/rds/${InstanceName}/port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Instance.Endpoint.Port
+
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Condition: HasEnhancedMonitoring
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole'
+
+  MysqlInstanceMonitor:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/instance-monitor.yml
+      Parameters:
+        Instance: !Ref Instance
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+
+  MysqlIOPSMonitor:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/iops-monitor.yml
+      Parameters:
+        Instance: !Ref Instance
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        IOPSThreshold: !Ref UnifiedIOPSHighThreshold
+
+
+Outputs:
+
+  Host:
+    Description: The RDS host.
+    Value: !GetAtt Instance.Endpoint.Address
+
+  Port:
+    Description: The RDS port.
+    Value: !GetAtt Instance.Endpoint.Port

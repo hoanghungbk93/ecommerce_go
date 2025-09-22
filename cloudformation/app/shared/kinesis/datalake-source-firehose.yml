@@ -1,0 +1,480 @@
+Description: Creates a Kinesis Firehose to a Data Lake sourcing bucket in S3.
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  ProjectName:
+    Description: >
+      The name of the project that owns the firehose. This parameter will be used to
+      name downstream resources to be easily identifiable.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    AllowedPattern: "[-a-z0-9]*"
+
+  EntityName:
+    Description: >
+      The name of the entity being emitted upstream. This parameter will be used as
+      a component of the target S3 prefix.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  DataLakeSourcingBucketArn:
+    Description: ARN for the data lake sourcing S3 bucket
+    Type: String
+
+  KeyPrefix:
+    Description: >
+      The prefix for S3 object keys in the sourcing bucket.
+      Defaults to ProjectName if not specified.
+    Type: String
+    AllowedPattern: "[a-z0-9-]*"
+    Default: ""
+
+  StreamProcessorBufferIntervalInSeconds:
+    Description: Maximum length of time in seconds to wait for the delivery stream processor to start
+    Type: Number
+    Default: 60
+
+  S3BufferIntervalInSeconds:
+    Description: Maximum length of time in seconds to wait before writing Kinesis Firehose data to S3
+    Type: Number
+    Default: 60
+
+  S3BufferSizeInMBs:
+    Description: Maximum length of data in MBs to wait before writing Kinesis Firehose data to S3
+    Type: Number
+    Default: 16
+
+  StreamProcessorBufferSizeInMBs:
+    Description: Maximum length of data in MBs to wait or the delivery stream processor to start
+    Type: Number
+    Default: 3
+
+  DateFormat:
+    Description: Format to convey date as partitions in the S3 folder schema
+    Type: String
+    Default: "system_year=!{timestamp:yyyy}/system_month=!{timestamp:MM}/system_day=!{timestamp:dd}/system_hour=!{timestamp:HH}/"
+
+  ShardCount:
+    Description: >
+      The number of shards that the stream uses.
+      For greater provisioned throughput, increase the number of shards.
+    Type: Number
+    Default: 2
+
+  TransformerReservedConcurrentExecutions:
+    Description: >
+      The number of simultaneous executions to reserve for the transformer function.
+    Type: Number
+    Default: 2
+
+  # Kinesis Firehose Alarm params
+
+  # PercentPutRequests
+  PercentPutRequestsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+    Default: 60
+
+  PercentPutRequestsEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+    Default: 1
+
+  PercentPutRequestsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+    Default: "critical"
+
+  # PercentPutRecords
+  PercentPutRecordsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+    Default: 60
+
+  PercentPutRecordsEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+    Default: 1
+
+  PercentPutRecordsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+    Default: "critical"
+
+  # PercentIncomingBytes
+  PercentIncomingBytesThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+    Default: 60
+
+  PercentIncomingBytesEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+    Default: 1
+
+  PercentIncomingBytesSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+    Default: "critical"
+
+  # ThrottledRecords
+  ThrottledRecordsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    Default: 1
+
+  ThrottledRecordsPeriod:
+    Type: Number
+    MinValue: 300
+    Default: 300
+
+  ThrottledRecordsEvaluationPeriods:
+    Type: Number
+    Default: 1
+
+  ThrottledRecordsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+    Default: "critical"
+
+  # DataFreshness
+  DataFreshnessThreshold:
+    Description: >
+      Value is in seconds.
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    Default: 90
+
+  DataFreshnessPeriod:
+    Type: Number
+    MinValue: 300
+    Default: 300
+
+  DataFreshnessEvaluationPeriods:
+    Type: Number
+    Default: 1
+
+  DataFreshnessSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+    Default: "critical"
+
+Mappings:
+  #
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Conditions:
+  #
+  HasKeyPrefix: !Not [!Equals [!Ref KeyPrefix, '']]
+
+Resources:
+  #
+  KinesisStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      ShardCount: !Ref ShardCount
+      StreamEncryption:
+        EncryptionType: KMS
+        KeyId: alias/aws/kinesis
+
+  FirehoseStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub ${EnvironmentName}-${ProjectName}-lake-source-firehose
+      DeliveryStreamType: KinesisStreamAsSource
+      KinesisStreamSourceConfiguration:
+        KinesisStreamARN: !GetAtt KinesisStream.Arn
+        RoleARN: !GetAtt KinesisAccessRole.Arn
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Ref DataLakeSourcingBucketArn
+        BufferingHints:
+          IntervalInSeconds: !Ref S3BufferIntervalInSeconds
+          SizeInMBs: !Ref S3BufferSizeInMBs
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref LogGroup
+          LogStreamName: !Ref S3DeliveryLogStream
+        ProcessingConfiguration:
+          Enabled: true
+          Processors:
+            - Parameters:
+                - ParameterName: BufferIntervalInSeconds
+                  ParameterValue: !Ref StreamProcessorBufferIntervalInSeconds
+                - ParameterName: BufferSizeInMBs
+                  ParameterValue: !Ref StreamProcessorBufferSizeInMBs
+                - ParameterName: LambdaArn
+                  ParameterValue: !GetAtt LineSplittingLambda.Arn
+                - ParameterName: RoleArn
+                  ParameterValue: !GetAtt LineSplittingLambdaAccessRole.Arn
+                - ParameterName: NumberOfRetries
+                  ParameterValue: "3"
+              Type: Lambda
+        CompressionFormat: UNCOMPRESSED
+        ErrorOutputPrefix: !Sub
+          - "${RootPrefix}/firehose-errors/error-type=!{firehose:error-output-type}/${DateFormat}"
+          - RootPrefix: !If [HasKeyPrefix, !Ref KeyPrefix, !Ref ProjectName]
+        Prefix: !Sub 
+          - "${RootPrefix}/${EntityName}/${DateFormat}"
+          - RootPrefix: !If [HasKeyPrefix, !Ref KeyPrefix, !Ref ProjectName]
+        RoleARN: !GetAtt FirehoseRole.Arn
+
+  KinesisAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-${ProjectName}-lake-kinesis-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - firehose.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        - PolicyName: grant-s3-streaming-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Sid: GrantKinesisStreamAccess
+                Action:
+                - "kinesis:DescribeStream"
+                - "kinesis:GetShardIterator"
+                - "kinesis:GetRecords"
+                - "kinesis:ListShards"
+                Resource: !GetAtt KinesisStream.Arn
+              - Effect: Allow
+                Sid: ReadFromEncryptedKinesisDataStream
+                Action: "kms:Decrypt"
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/kinesis
+                Condition:
+                  StringEquals:
+                    "kms:ViaService": !Sub "kinesis.${AWS::Region}.amazonaws.com"
+                  StringLike:
+                    "kms:EncryptionContext:aws:kinesis:arn": !GetAtt KinesisStream.Arn
+
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-${ProjectName}-lake-delivery-role"
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: firehose.amazonaws.com
+      Policies:
+        - PolicyName: grant-firehose-s3-streaming-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Sid: SendStreamToS3
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:ListBucketMultipartUploads
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Ref DataLakeSourcingBucketArn
+                  - !Join ["", [ !Ref DataLakeSourcingBucketArn, "/*"]]
+              - Effect: Allow
+                Sid: UseKinesisStreamAsSource
+                Action:
+                - kinesis:DescribeStream
+                - kinesis:GetShardIterator
+                - kinesis:GetRecords
+                - kinesis:ListShards
+                Resource: !GetAtt KinesisStream.Arn
+              - Effect: Allow
+                Sid: ReadEncryptedKinesisDataStream
+                Action: kms:Decrypt
+                Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:alias/aws/kinesis
+                Condition:
+                  StringEquals:
+                    "kms:ViaService": !Sub "kinesis.${AWS::Region}.amazonaws.com"
+                  StringLike:
+                    "kms:EncryptionContext:aws:kinesis:arn": !GetAtt KinesisStream.Arn
+        - PolicyName: cloudwatch-logs-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+                Resource: !Sub ${LogGroup.Arn}:*
+
+  LineSplittingLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-lake-firehose-xformer"
+      Description: "Splits records into lines by adding an EOL character"
+      Code:
+        ZipFile: >
+          import json, base64, copy
+
+          def lambda_handler(event, context):
+              output = []
+              for record in event['records']:
+                  print (record)
+                  # Decode from base64 (Firehose records are base64 encoded)
+                  payload = base64.b64decode(record['data'])
+
+                  # Read json as utf-8
+                  json_string = payload.decode("utf-8")
+
+                  # Add a line break
+                  output_json_with_line_break = json_string + "\n"
+
+                  # Encode the data
+                  encoded_bytes = base64.b64encode(bytearray(output_json_with_line_break, 'utf-8'))
+                  encoded_string = str(encoded_bytes, 'utf-8')
+
+                  # Create copy of the record and append to output with transformed data
+                  output_record = copy.deepcopy(record)
+                  output_record['data'] = encoded_string
+                  output_record['result'] = 'Ok'
+
+                  output.append(output_record)
+
+              print('Successfully processed records {} records'.format(len(event['records'])))
+
+              return {'records': output}
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt LineSplittingLambdaRole.Arn
+      ReservedConcurrentExecutions: !Ref TransformerReservedConcurrentExecutions
+      Runtime: python3.9
+      Timeout: 120
+
+  LineSplittingLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-${ProjectName}-lake-xformer-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  LineSplittingLambdaAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${EnvironmentName}-${ProjectName}-lake-xformer-access-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: grant-lambda-access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt LineSplittingLambda.Arn
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${EnvironmentName}-${ProjectName}-lake-source-firehose
+      RetentionInDays: 30
+
+  S3DeliveryLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogStreamName: s3-delivery
+      LogGroupName: !Ref LogGroup
+
+  # Why no dead-letter queue?
+  #
+  # DeadLetterConfig on the Lambda function only works with asynchronous
+  # invocations.
+  #
+  # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-lambda-function-deadletterconfig.html
+  #
+  # Kinesis DataFirehose invokes transformation functions using synchronous
+  # invocation mode.
+  #
+  # If the Lambda fails, Firehose retries three times (by default, but also
+  # configured explicitly) and ultimately marks the records as failed and skips
+  # the batch. These failed records are delivered to S3 in the
+  # processing-failed folder.
+  #
+  # https://docs.aws.amazon.com/firehose/latest/dev/data-transformation.html
+  #
+  # An event source mapping with on-failure destination cannot be leveraged in
+  # this scenario because the Lambda function is invoked by Kinesis Firehose,
+  # not Kinesis Data Streams.
+  #
+  # So what more could we do (realistically) in a future iteration?
+  # - Alarm on data stream metrics (in addition to delivery stream alarms)
+  # - Alarm on processing-failed folder
+
+  FirehoseStreamAlarms:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/kinesis/alarms/delivery-stream.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        AlarmTarget: !Ref AlarmTarget
+        DeliveryStream: !Ref FirehoseStream
+        PercentPutRequestsThreshold: !Ref PercentPutRequestsThreshold
+        PercentPutRequestsEvaluationPeriods: !Ref PercentPutRequestsEvaluationPeriods
+        PercentPutRequestsSeverity: !Ref PercentPutRequestsSeverity
+        PercentPutRecordsThreshold: !Ref PercentPutRecordsThreshold
+        PercentPutRecordsEvaluationPeriods: !Ref PercentPutRecordsEvaluationPeriods
+        PercentPutRecordsSeverity: !Ref PercentPutRecordsSeverity
+        PercentIncomingBytesThreshold: !Ref PercentIncomingBytesThreshold
+        PercentIncomingBytesEvaluationPeriods: !Ref PercentIncomingBytesEvaluationPeriods
+        PercentIncomingBytesSeverity: !Ref PercentIncomingBytesSeverity
+        ThrottledRecordsThreshold: !Ref ThrottledRecordsThreshold
+        ThrottledRecordsPeriod: !Ref ThrottledRecordsPeriod
+        ThrottledRecordsEvaluationPeriods: !Ref ThrottledRecordsEvaluationPeriods
+        ThrottledRecordsSeverity: !Ref ThrottledRecordsSeverity
+        DataFreshnessThreshold: !Ref DataFreshnessThreshold
+        DataFreshnessPeriod: !Ref DataFreshnessPeriod
+        DataFreshnessEvaluationPeriods: !Ref DataFreshnessEvaluationPeriods
+        DataFreshnessSeverity: !Ref DataFreshnessSeverity
+
+Outputs:
+  #
+  KinesisStreamArn:
+    Description: The ARN of the Kinesis stream.
+    Value: !GetAtt KinesisStream.Arn

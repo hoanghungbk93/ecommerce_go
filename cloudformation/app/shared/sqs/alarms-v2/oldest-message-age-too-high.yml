@@ -1,0 +1,62 @@
+Description: Creates an alarm for an SQS queue on the oldest message age metric. (v2)
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  QueueName:
+    Type: String
+
+  OldestMessageAgeTooHighThreshold:
+    Type: Number
+    # Default: 1
+    MinValue: 1
+
+  OldestMessageAgeTooHighPeriod:
+    Type: Number
+    # Default: 300
+
+  OldestMessageAgeTooHighEvaluationPeriods:
+    Type: Number
+    # Default: 1
+
+  OldestMessageAgeTooHighSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+Resources:
+  #
+  OldestMessageAgeTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${QueueName}-MsgAgeTooHigh
+      AlarmDescription: !Sub "${OldestMessageAgeTooHighSeverity}: sqs: ${QueueName} messages are too old."
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref OldestMessageAgeTooHighThreshold
+      Period: !Ref OldestMessageAgeTooHighPeriod
+      EvaluationPeriods: !Ref OldestMessageAgeTooHighEvaluationPeriods
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub ${QueueName}
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn

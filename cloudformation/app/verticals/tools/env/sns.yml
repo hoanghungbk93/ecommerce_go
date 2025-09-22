@@ -1,0 +1,60 @@
+Description: Creates SNS topics for influencer tools usage.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+
+  # Note that all dev and qa alerts are sent to the low urgency dev
+  # pagerduty endpoint so that they don't wake people up at night.
+
+  PagerDutyEndpoints:
+    dev:
+      LowUrgency: https://events.pagerduty.com/integration/c91fc72dde3a40feb85d0b2e15345377/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/c91fc72dde3a40feb85d0b2e15345377/enqueue
+    qa:
+      LowUrgency: https://events.pagerduty.com/integration/c91fc72dde3a40feb85d0b2e15345377/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/c91fc72dde3a40feb85d0b2e15345377/enqueue
+    prod:
+      LowUrgency: https://events.pagerduty.com/integration/e60b6d20871c43ad868334f7030c2467/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/d023f01a8e9140f5a5b9786e29f81b59/enqueue
+
+Resources:
+
+  LowUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-tools-low-urgency-alerts
+
+  LowUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LowUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, LowUrgency]
+      Protocol: https
+
+  CriticalUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-tools-critical-urgency-alerts
+
+  CriticalUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, CriticalUrgency]
+      Protocol: https
+
+Outputs:
+
+  LowUrgencyAlertsTopicArn:
+    Description: The ARN of the low urgency alerts SNS topic.
+    Value: !Ref LowUrgencyAlerts
+
+  CriticalUrgencyAlertsTopicArn:
+    Description: The ARN of the critical urgency alerts SNS topic.
+    Value: !Ref CriticalUrgencyAlerts

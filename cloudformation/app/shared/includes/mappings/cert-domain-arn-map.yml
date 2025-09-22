@@ -1,0 +1,59 @@
+---
+liketoknow.it:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+ltk.rip:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+rewardstyle.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+rewardstyle.com.cn:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/7fb4c045-d733-4125-8f28-eb9cbe441f75
+rs-publishing-dev.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:406233834736:certificate/61940446-2e9a-49d4-9409-333fdaac3017
+rscollaborationsdev.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:676403976676:certificate/409d0315-335a-4ec3-9868-f77019ed55f6
+rstyle.me:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/c2d7a70a-b7ac-4ebf-9d57-4e70fcb1135e
+nastygoat.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/7cebb2c7-cd9b-4dd6-a3de-767bbfe2d2a5
+currentlyobsessed.me:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/c21c2e7c-8842-415b-a614-89ad096f698a
+liketk.it:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/3e20a86f-a706-4299-9bd1-f81bfc983edc
+liketoknowit.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/7ac9c2da-4d1c-4625-852f-a3a3fc45c2e9
+rsstratdev.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:232188586941:certificate/51e8b9f6-d5a7-4a0c-89a4-5c91858e9771
+pub.rsstratdev.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:232188586941:certificate/476dcec0-6f9e-486c-89c7-35a88c7e6c61
+somehowit.works:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+shopltk.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/f685beee-1504-4b7e-bbdb-ec6e4a9b9e8b
+qashopltk.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/ff537f3d-116a-4168-85f7-807543d7eefc
+shopltk.co.uk:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/9562f360-fe5e-4e09-bc40-ad5876419b35
+pudovietnam.com:
+  Arn: >-
+    arn:aws:acm:ap-southeast-1:441221892871:certificate/94ba437c-a97f-4b43-ac08-35b1f036aae9
+pudovietnam.com-cdn:
+  Arn: >-
+    arn:aws:acm:us-east-1:441221892871:certificate/da7bca3e-51fe-480d-b588-3ce6f875f959
+

@@ -1,0 +1,42 @@
+---
+Description: >-
+  Exposes an ELB under our private service discovery namespace.
+Parameters:
+  EnvironmentName:
+    Type: String
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+  LoadBalancerName:
+    Type: String
+  LoadBalancerDNSName:
+    Type: String
+
+Conditions:
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Resources:
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Properties:
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: 60
+        RoutingPolicy: WEIGHTED
+      Name: !Join
+        - "-"
+        - - !If [HasSubEnvironment, !Ref SubEnvironmentName, !Ref AWS::NoValue]
+          - !Sub ${LoadBalancerName}.elb
+      NamespaceId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:service-discovery:private-dns-namespace:env:id
+
+  ServiceDiscoveryInstance:
+    Type: AWS::ServiceDiscovery::Instance
+    Properties:
+      InstanceAttributes:
+        AWS_ALIAS_DNS_NAME: !Ref LoadBalancerDNSName
+      ServiceId: !Ref ServiceDiscoveryService
+
+# vim: set ft=yaml.cloudformation :

@@ -1,0 +1,66 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "blog"
+  },
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ImageUrl",
+    "ParameterValue": "142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/blog-backend"
+  },
+  {
+    "ParameterKey": "FrontendImageUrl",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "GitSha",
+    "ParameterValue": "latest"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
+    "ParameterKey": "ClusterMinSize",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ClusterMaxSize",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "ClusterDesiredCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "BackendCPU",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "BackendMemoryReservation",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "BackendDesiredCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "LoadBalancerScheme",
+    "ParameterValue": "internet-facing"
+  },
+  {
+    "ParameterKey": "EnableDatabase",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "DatabaseEngine",
+    "ParameterValue": "mysql"
+  },
+  {
+    "ParameterKey": "DatabaseInstanceClass",
+    "ParameterValue": "db.t3.micro"
+  }
+]

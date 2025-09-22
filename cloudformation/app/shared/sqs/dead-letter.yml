@@ -1,0 +1,150 @@
+Description: Creates a deadletter sqs queue with an alarm on content-age
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  QueueName:
+    Description: >
+      Note the real queue name will have the prefix "<ENV>-" and the suffix "-dlq".
+      If this is empty, you must supply either TargetHandlerArn or (ParentStackId and ParentStackTarget).
+    Type: String
+    AllowedPattern: "^([a-z0-9][-a-z0-9]*|)$"
+
+  RetryTargetArn:
+    Description: >
+      The arn of the aws resource that would accept retry events from the dlq.
+    Type: String
+    Default: ""
+
+  ParentStackId:
+    Description: >
+      The value of AWS::StackId pseudo parameter from the parent stack which contains
+      the logical name of the cloudformation resource that would accept event retries.
+      If you specify this parameter you should also specify ParentStackTarget.
+    Type: String
+    Default: ""
+
+  ParentStackTarget:
+    Description: >
+      The logical name of the cloudformation resource that would accept retry events from the dlq.
+      If you specify this parameter you should also specify ParentStackId.
+    Type: String
+    Default: ""
+
+Mappings:
+  #
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Conditions:
+  HasQueName: !Not [!Equals [!Ref QueueName, ""]]
+  HasRetryTargetArn: !Not [!Equals [!Ref RetryTargetArn, ""]]
+  HasParentStackId: !Not [!Equals [!Ref ParentStackId, ""]]
+  HasParentStackTarget: !Not [!Equals [!Ref ParentStackTarget, ""]]
+
+Resources:
+  #
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !If
+        - HasQueName
+        - !Sub ${Namespace}-${QueueName}-dlq
+        - !Ref AWS::NoValue
+      MaximumMessageSize: 262144
+      MessageRetentionPeriod: 1209600 # 1209600 seconds = 14 days
+      Tags:
+        - Key: QueueType
+          Value: dlq
+        - !If
+          - HasRetryTargetArn
+          - Key: RetryTargetArn
+            Value: !Ref RetryTargetArn
+          - !Ref AWS::NoValue
+        - !If
+          - HasParentStackId
+          - Key: ParentStackId
+            Value: !Ref ParentStackId
+          - !Ref AWS::NoValue
+        - !If
+          - HasParentStackTarget
+          - Key: ParentStackTarget
+            Value: !Ref ParentStackTarget
+          - !Ref AWS::NoValue
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/sqs/alarms-v2/oldest-message-age-too-high.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        QueueName: !GetAtt DeadLetterQueue.QueueName
+        AlarmTarget: !Ref AlarmTarget
+        OldestMessageAgeTooHighThreshold: 1
+        OldestMessageAgeTooHighPeriod: 300
+        OldestMessageAgeTooHighEvaluationPeriods: 1
+        OldestMessageAgeTooHighSeverity: critical
+
+  #
+  # example queue policy:
+  #
+  # DeadLetterQueuePolicy:
+  #   Type: AWS::SQS::QueuePolicy
+  #   Properties:
+  #     PolicyDocument:
+  #       Version: "2012-10-17"
+  #       Statement:
+  #         - Sid: allow-bus-send-to-sqs
+  #           Effect: Allow
+  #           Principal:
+  #             Service: events.amazonaws.com
+  #           Action:
+  #             - sqs:SendMessage
+  #           Resource: !GetAtt DeadLetterQueue.Outputs.Arn
+  #           Condition:
+  #             ArnEquals:
+  #               aws:SourceArn: !GetAtt BusToFirehoseRule.Arn
+  #     Queues:
+  #       - !Ref DeadLetterQueue.Outputs.Url
+
+Outputs:
+  #
+  Url:
+    Value: !Ref DeadLetterQueue
+
+  Arn:
+    Value: !GetAtt DeadLetterQueue.Arn
+
+  Name:
+    Value: !GetAtt DeadLetterQueue.QueueName

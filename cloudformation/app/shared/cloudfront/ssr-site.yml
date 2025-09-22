@@ -1,0 +1,894 @@
+Description: Creates a CloudFrontDistribution and s3 buckets necessary to manage static site resources for SSR Setups.
+
+# Note: Magic Cloudfront Zone ID = "Z2FDTNDATAQYW2"
+# Ref: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html
+
+Parameters:
+  ParentAccountId:
+    Description: >
+      DO NOT OVERRIDE:
+      The aws account id in which the CICD user resides.
+    Type: String
+    Default: "441221892871"
+    AllowedValues: ["", "441221892871"]
+
+  IamBuildUser:
+    Description: >
+      DO NOT OVERRIDE:
+      The CICD user name in ParentAccountId used for building and deploying.
+    Type: String
+    Default: "circle-artificer"
+    AllowedValues: ["", "circle-artificer"]
+
+  # Real Parameters
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  ProjectName:
+    Description: >
+      The project name of the static site. Should be the github repository name.
+      This value is used to create permanent s3 buckets and should NOT change over time.
+    Type: String
+
+  IsDomainRoot:
+    Description: Sets if the static site supports 'www.domain.com' and 'domain.com' aliases.
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  DNSName:
+    Description: >
+      The name of the alias created for the CloudFrontDistribution. If not specified,
+      ${EnvironmentName}-${ProjectName} will be used.
+    Type: String
+    Default: ""
+
+  DNSAliases:
+    Description: >
+      The name of the vanity urls created for the CloudFrontDistribution. If multiple
+      vanity urls are desired, a comma separated list should be provided.
+    Type: String
+    Default: ""
+
+  EnableS3AccessLogs:
+    Description: Whether or not to log s3 access requests to the site's log bucket. Defaults to 'true'
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+  BucketSuffix:
+    Description: >
+      Leave empty unless you need to work around existing bucket names.
+      Note that this value will have a dash added to the front of it automatically.
+      A value like '20180323' will effectively be a suffix of '-20180323'
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns these resources. The vertical name is required
+      to be lowercase, relatively short, and without spaces.
+    Type: String
+
+  403ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your origin returns the HTTP 403 status code.
+      To disable set to an empty string.
+      Defaults to '/index.html'
+      A custom error page of /index.html is not allowed when using a firewall ( indicated by FirewallBadResponseCodesMaxPerMinute > 0 ) the default aws 403 page will instead be used
+    Type: String
+    Default: /index.html
+
+  403ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 403 status code.
+      Only used when '403ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  403ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the custom 403 error page.
+      Only used when '403ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  404ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your origin returns the HTTP 404 status code.
+      To disable set to an empty string.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  404ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 404 status code.
+      Only used when '404ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  404ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 404 custom error page.
+      Only used when '404ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  500ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your dynamic origin returns the HTTP 500 status code.
+      To disable set to an empty string. It is not recommended to disable this setting as timeout and container issues may happen.
+      For best user experience, a "fallback" or empty page shell that will force a full client side render would be best.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  500ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 500 status code.
+      Only used when '500ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  500ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 500 custom error page.
+      Only used when '500ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  502ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your dynamic origin returns the HTTP 502 status code.
+      To disable set to an empty string. It is not recommended to disable this setting as timeout and container issues may happen.
+      For best user experience, a "fallback" or empty page shell that will force a full client side render would be best.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  502ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 502 status code.
+      Only used when '502ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  502ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 502 custom error page.
+      Only used when '502ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  503ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your dynamic origin returns the HTTP 503 status code.
+      To disable set to an empty string. It is not recommended to disable this setting as timeout and container issues may happen.
+      For best user experience, a "fallback" or empty page shell that will force a full client side render would be best.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  503ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 503 status code.
+      Only used when '503ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  503ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 503 custom error page.
+      Only used when '503ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  504ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your dynamic origin returns the HTTP 504 status code.
+      To disable set to an empty string. It is not recommended to disable this setting as timeout and container issues may happen.
+      For best user experience, a "fallback" or empty page shell that will force a full client side render would be best.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  504ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 504 status code.
+      Only used when '504ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  504ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 504 custom error page.
+      Only used when '504ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  DomainName:
+    Description: >
+      The domain name to be used for this static site. Also used for SSL.
+    Type: String
+
+  HostedZoneId:
+    Description: >
+      The HostedZoneId to be used for this static site.
+    Type: String
+    Default: ""
+
+  FirewallBadResponseCodesMaxPerMinute:
+    Type: Number
+    Description: >
+      The maximum number of bad requests per minute an origin IP can issue before they are considered abusive and blocked.
+      Does nothing if <= 0
+    MinValue: 0
+    Default: 0
+
+  WebACLId:
+    Type: String
+    Description: >
+      Ignored when FirewallBadResponseCodesMaxPerMinute > 0
+    Default: ""
+
+  FirewallRateLimitSoftThreshold:
+    Description: >-
+      The lower bound rate limit of requests per 5 minutes to begin setting an additional header to potentially
+      spammy requests. Allows reporting or applications the ability to handle these requests themselves.
+    Type: Number
+    Default: -1
+
+  FirewallRateLimitHardThreshold:
+    Description: >-
+      The lower bound rate limit of requests per 5 minutes to begin blocking requests from spammy client IPs.
+    Type: Number
+    Default: -1
+
+  FirewallStaticFilesRegexList:
+    Description: >-
+      A comma separated list of regex patterns to capture static files that should not count towards rate limits.
+      Helpful to not count against known cascading requests from loading a page, and instead focuses rate limits
+      on requests that overload origins.
+    Type: String
+    Default: ""
+
+  FirewallBadResponseCodesRegex:
+    Type: String
+    Description: >
+      A python regular expression used to select access responses that indicate abusive behavior.
+      This string is used in python like: re.compile(string).match(example_http_code_str)
+      Unused unless FirewallBadResponseCodesMaxPerMinute > 0
+    Default: "(?:4..)" # 4xx responses indicate a bad client or bad client request
+
+  FirewallBadResponseCodesBlockSeconds:
+    Type: Number
+    Description: >
+      How long an abusive user is blocked.
+    Default: 14400 # 4 hours
+    MinValue: 300 # 5 minutes
+
+  ViewerRequestFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles viewer-request type events.
+      Ignored if empty string.
+    Type: String
+    Default: ""
+
+  OriginRequestFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles origin-request type events.
+      Ignored if empty string.
+    Type: String
+    Default: ""
+
+  OriginDomainName:
+    Description: >-
+      The domain name of the server that cloudfront should proxy requests to as an origin.
+    Type: String
+
+  OriginPath:
+    Description: >-
+      The absolute path on a server that cloudfront should proxy requests to as an origin.
+    Type: String
+    Default: ""
+
+  OriginKeepaliveTimeout:
+    Type: Number
+    Default: 5
+
+  OriginReadTimeout:
+    Type: Number
+    Default: 30
+
+  4xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Client-error rate thresold in percentage
+    Default: 3
+
+  5xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Error rate thresold in percentage
+    Default: 1
+
+  CachePolicyId:
+    Description: >-
+      The unique identifier of the cache policy that is attached to the default cache behavior.
+      If none is provided the default AWS managed policy named Managed-CachingOptimized will be used:
+      https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-cache-policies.html
+    Type: String
+    Default: "658327ea-f89d-4fab-a63d-7e88639e58f6"
+
+  OriginRequestPolicyId:
+    Description: >-
+      The unique identifier of the origin request policy that is attached to the default cache behavior.
+      If none is provided the default AWS managed policy named Managed-UserAgentRefererHeaders will be used:
+      https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/using-managed-origin-request-policies.html
+    Type: String
+    Default: "acba4595-bd28-49b8-b9fe-13317c0390fa"
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "${EnvironmentName}:alarm-target:${AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  4xxAlarmLevel:
+    Description: >
+      The level of the V2 alarm to appear in the alarm description for severity routing purposes.
+      If not using an alarm target, this value is ignored and the v1 low/critical routing logic
+      will be used instead.
+    Type: String
+    AllowedPattern: "(?i:crit(ical)?|err(or)?|warn(ing)?|low|info)"
+    Default: "warn"
+
+  5xxAlarmLevel:
+    Description: >
+      The level of the V2 alarm to appear in the alarm description for severity routing purposes.
+      If not using an alarm target, this value is ignored and the v1 low/critical routing logic
+      will be used instead.
+    Type: String
+    AllowedPattern: "(?i:crit(ical)?|err(or)?|warn(ing)?|low|info)"
+    Default: "crit"
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - E7001
+Mappings:
+  CertArnByDomain:
+    "Fn::Transform":
+      Name: "AWS::Include"
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+  # https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_website_region_endpoints
+  # Last Updated: 2018-03-21
+  HostedZoneIds:
+    "Fn::Transform":
+      Name: "AWS::Include"
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/hosted-zone-ids.yml
+
+  # "Currently, you can specify only certificates that are in the US East (N. Virginia) region."
+  # ( when configuring cloudfront )
+  # Doclink: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cloudfront-distribution-viewercertificate.html#cfn-cloudfront-distribution-viewercertificate-acmcertificatearn
+
+Conditions:
+  HasDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  HasHostedZoneID: !Not [!Equals [!Ref HostedZoneId, ""]]
+  HasDNSAliases: !Not [!Equals [!Ref DNSAliases, ""]]
+  HasBucketSuffix: !Not [!Equals [!Ref BucketSuffix, ""]]
+  HasDomainRootAliases: !Equals [!Ref IsDomainRoot, "true"]
+  HasParentAccountId: !Not [!Equals [!Ref ParentAccountId, ""]]
+  HasIamBuildUser:
+    !And [!Condition HasParentAccountId, !Not [!Equals [!Ref IamBuildUser, ""]]]
+  HasEnvironmentProd: !Equals [!Ref EnvironmentName, "prod"]
+  HasS3OriginLogsEnabled: !Equals [!Ref EnableS3AccessLogs, "true"]
+  HasRateLimitSoftThreshold:
+    !Not [!Equals [!Ref FirewallRateLimitSoftThreshold, -1]]
+  HasRateLimitHardThreshold:
+    !Not [!Equals [!Ref FirewallRateLimitHardThreshold, -1]]
+  CreateFirewall: !Or
+    - !Condition HasHttpCodeLimiting
+    - !Condition HasRateLimitSoftThreshold
+    - !Condition HasRateLimitHardThreshold
+  HasHttpCodeLimiting:
+    !Not [!Equals [!Ref FirewallBadResponseCodesMaxPerMinute, 0]]
+  Has403ResponsePagePath: !And
+    - !Not [!Equals [!Ref 403ResponsePagePath, ""]]
+    - !Or [
+        !Not [!Condition CreateFirewall],
+        !Not [!Equals [!Ref 403ResponsePagePath, "/index.html"]],
+      ]
+  Has404ResponsePagePath: !Not [!Equals [!Ref 404ResponsePagePath, ""]]
+  Has500ResponsePagePath: !Not [!Equals [!Ref 500ResponsePagePath, ""]]
+  Has502ResponsePagePath: !Not [!Equals [!Ref 502ResponsePagePath, ""]]
+  Has503ResponsePagePath: !Not [!Equals [!Ref 503ResponsePagePath, ""]]
+  Has504ResponsePagePath: !Not [!Equals [!Ref 504ResponsePagePath, ""]]
+  HasWebACLId:
+    !And [!Not [!Condition CreateFirewall], !Not [!Equals [!Ref WebACLId, ""]]]
+  HasViewerRequestFunction: !Not [!Equals [!Ref ViewerRequestFunction, ""]]
+  HasOriginRequestFunction: !Not [!Equals [!Ref OriginRequestFunction, ""]]
+  HasNoSubEnvironmentName: !Equals [!Ref SubEnvironmentName, ""]
+  HasSubEnvironmentName: !Not [!Condition HasNoSubEnvironmentName]
+  HasFirewallStaticFilesRegexList:
+    !Not [!Equals [!Ref FirewallStaticFilesRegexList, ""]]
+  EnableUsaEmbargoWebACL: !Or
+    - !Not [!Condition CreateFirewall]
+    - !Not [!Condition HasWebACLId]
+
+Resources:
+  EnvNamespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ""
+        - - !Sub ${EnvNamespace}-${VerticalName}-${ProjectName}-logs
+          - !If [HasBucketSuffix, "-", ""]
+          - !Ref BucketSuffix
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRuleCloudfront
+            Status: Enabled
+            ExpirationInDays: "365"
+            Prefix: cloudfront/logs/
+            Transitions:
+              - TransitionInDays: "90"
+                StorageClass: Glacier
+          - Id: GlacierRuleS3
+            Status: Enabled
+            ExpirationInDays: "365"
+            Prefix: s3/logs/
+            Transitions:
+              - TransitionInDays: "90"
+                StorageClass: Glacier
+
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - LoggingBucket
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}
+              - !Sub arn:aws:s3:::${LoggingBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - LoggingBucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ""
+        - - !Sub ${EnvNamespace}-${VerticalName}-${ProjectName}-site
+          - !If [HasBucketSuffix, "-", ""]
+          - !Ref BucketSuffix
+      LoggingConfiguration: !If
+        - HasS3OriginLogsEnabled
+        - DestinationBucketName: !Ref LoggingBucket
+          LogFilePrefix: s3/logs/
+        - !Ref AWS::NoValue
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      VersioningConfiguration:
+        Status: Enabled
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - SiteBucket
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}
+              - !Sub arn:aws:s3:::${SiteBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - !If
+            - HasParentAccountId
+            - Action:
+                - s3:Get*
+                - s3:List*
+                - s3:PutObject*
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:s3:::${SiteBucket}
+                - !Sub arn:aws:s3:::${SiteBucket}/*
+              Principal:
+                AWS:
+                  - !Sub arn:aws:iam::${ParentAccountId}:root
+                  - !If
+                    - HasIamBuildUser
+                    - !Sub "arn:aws:iam::${ParentAccountId}:user/${IamBuildUser}"
+                    - !Ref "AWS::NoValue"
+            - !Ref AWS::NoValue
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}/*
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Condition: HasNoSubEnvironmentName
+    Properties:
+      BucketName: !Join
+        - ""
+        - - !Sub ${EnvironmentName}-${VerticalName}-${ProjectName}-artifacts
+          - !If [HasBucketSuffix, "-", ""]
+          - !Ref BucketSuffix
+      VersioningConfiguration:
+        Status: Enabled
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasNoSubEnvironmentName
+    DependsOn:
+      - ArtifactsBucket
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${ArtifactsBucket}
+              - !Sub arn:aws:s3:::${ArtifactsBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - !If
+            - HasParentAccountId
+            - Action:
+                - s3:Get*
+                - s3:List*
+                - s3:PutObject*
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:s3:::${ArtifactsBucket}
+                - !Sub arn:aws:s3:::${ArtifactsBucket}/*
+              Principal:
+                AWS:
+                  - !Sub arn:aws:iam::${ParentAccountId}:root
+                  - !If [
+                      HasIamBuildUser,
+                      !Sub "arn:aws:iam::${ParentAccountId}:user/${IamBuildUser}",
+                      !Ref "AWS::NoValue",
+                    ]
+            - !Ref AWS::NoValue
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub >-
+          Grants cloudfront access to read ${EnvNamespace}-${VerticalName}-${ProjectName}-site S3 Bucket
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - SiteBucket
+      - SiteBucketPolicy
+      - LoggingBucket
+    Properties:
+      DistributionConfig:
+        WebACLId: !If
+          - CreateFirewall
+          - !GetAtt FirewallV2.Outputs.WebACLArn
+          - !If
+            - HasWebACLId
+            - !Ref WebACLId
+            - !If
+              - EnableUsaEmbargoWebACL
+              - !ImportValue WafV2CloudfrontWebAclUsaEmbargoArn
+              - !Ref 'AWS::NoValue'
+        CustomErrorResponses:
+          - !If
+            - Has403ResponsePagePath
+            - ErrorCode: 403
+              ErrorCachingMinTTL: !Ref 403ErrorCachingMinTTL
+              ResponseCode: !Ref 403ResponseCode
+              ResponsePagePath: !Ref 403ResponsePagePath
+            - !Ref AWS::NoValue
+          - !If
+            - Has404ResponsePagePath
+            - ErrorCode: 404
+              ErrorCachingMinTTL: !Ref 404ErrorCachingMinTTL
+              ResponseCode: !Ref 404ResponseCode
+              ResponsePagePath: !Ref 404ResponsePagePath
+            - !Ref AWS::NoValue
+          - !If
+            - Has500ResponsePagePath
+            - ErrorCode: 500
+              ErrorCachingMinTTL: !Ref 500ErrorCachingMinTTL
+              ResponseCode: !Ref 500ResponseCode
+              ResponsePagePath: !Ref 500ResponsePagePath
+            - !Ref AWS::NoValue
+          - !If
+            - Has502ResponsePagePath
+            - ErrorCode: 502
+              ErrorCachingMinTTL: !Ref 502ErrorCachingMinTTL
+              ResponseCode: !Ref 502ResponseCode
+              ResponsePagePath: !Ref 502ResponsePagePath
+            - !Ref AWS::NoValue
+          - !If
+            - Has503ResponsePagePath
+            - ErrorCode: 503
+              ErrorCachingMinTTL: !Ref 503ErrorCachingMinTTL
+              ResponseCode: !Ref 503ResponseCode
+              ResponsePagePath: !Ref 503ResponsePagePath
+            - !Ref AWS::NoValue
+          - !If
+            - Has504ResponsePagePath
+            - ErrorCode: 504
+              ErrorCachingMinTTL: !Ref 504ErrorCachingMinTTL
+              ResponseCode: !Ref 504ResponseCode
+              ResponsePagePath: !Ref 504ResponsePagePath
+            - !Ref AWS::NoValue
+        Aliases: !Split
+          - ","
+          - !Join
+            - ","
+            - - !If
+                - HasDomainRootAliases
+                - !Sub "www.${DomainName},${DomainName}"
+                - !Ref AWS::NoValue
+              - !Join
+                - "."
+                - - !If
+                    - HasDNSName
+                    - !Ref DNSName
+                    - !Sub "${EnvNamespace}-${ProjectName}"
+                  - !Ref DomainName
+              - !If
+                - HasDNSAliases
+                - !Ref DNSAliases
+                - !Ref AWS::NoValue
+
+        Comment: !Join
+          - ""
+          - - !Sub Public static website ${EnvNamespace}-${ProjectName}
+            - !If [HasDNSName, !Sub " alias=${DNSName}", ""]
+        Logging:
+          Bucket: !GetAtt LoggingBucket.DomainName
+          IncludeCookies: false
+          Prefix: cloudfront/logs/
+        Origins:
+          - Id: s3origin
+            DomainName: !GetAtt SiteBucket.DomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Join
+                - /
+                - - origin-access-identity/cloudfront
+                  - !Ref CloudFrontOriginAccessIdentity
+          - Id: dynamicorigin
+            DomainName: !Ref OriginDomainName
+            OriginPath: !Ref OriginPath
+            CustomOriginConfig:
+              OriginProtocolPolicy: match-viewer
+              OriginKeepaliveTimeout: !Ref OriginKeepaliveTimeout
+              OriginReadTimeout: !Ref OriginReadTimeout
+        OriginGroups:
+          Quantity: 1
+          Items: # Prefer S3 items, and fallback to server for anything missing
+            - Id: defaultgroup
+              FailoverCriteria:
+                StatusCodes:
+                  Quantity: 2
+                  Items:
+                    - 403
+                    - 404
+              Members:
+                Quantity: 2
+                Items:
+                  - OriginId: s3origin
+                  - OriginId: dynamicorigin
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachePolicyId: !Ref CachePolicyId
+          OriginRequestPolicyId: !Ref OriginRequestPolicyId
+          TargetOriginId: defaultgroup
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          LambdaFunctionAssociations:
+            - !If
+              - HasViewerRequestFunction
+              - LambdaFunctionARN: !Ref ViewerRequestFunction
+                EventType: viewer-request
+              - !Ref AWS::NoValue
+            - !If
+              - HasOriginRequestFunction
+              - LambdaFunctionARN: !Ref OriginRequestFunction
+                EventType: origin-request
+              - !Ref AWS::NoValue
+        DefaultRootObject: ""
+        Enabled: true
+        HttpVersion: http2
+        PriceClass: !If
+          - HasEnvironmentProd
+          - PriceClass_All
+          - PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2018
+
+  PublicCloudFrontRecordSet:
+    Type: AWS::Route53::RecordSet
+    DependsOn:
+      - CloudFrontDistribution
+    Properties:
+      Comment: !Sub >-
+        DNS for external communication to the ${EnvNamespace}-${ProjectName}
+        static CloudFront site.
+      HostedZoneName: !If
+        - HasHostedZoneID
+        - !Ref AWS::NoValue
+        - !Sub ${DomainName}.
+      HostedZoneId: !If
+        - HasHostedZoneID
+        - !Sub ${HostedZoneId}
+        - !Ref AWS::NoValue
+      Name: !Join
+        - ""
+        - - !If
+            - HasDNSName
+            - !Ref DNSName
+            - !Sub "${EnvNamespace}-${ProjectName}"
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  FirewallV2:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/firewall-v2/rate-limit.yml
+      Parameters:
+        # shim for subenv: a shim here is safe because this nested stack only
+        # uses EnvironmentName as a resource prefix
+        EnvironmentName: !Ref EnvNamespace
+        ProjectName: !Ref ProjectName
+        RateLimitSoftThreshold: !Ref FirewallRateLimitSoftThreshold
+        RateLimitHardThreshold: !Ref FirewallRateLimitHardThreshold
+        RegularExpressionsList: !If
+          - HasFirewallStaticFilesRegexList
+          - !Ref FirewallStaticFilesRegexList
+          - !Ref AWS::NoValue
+        FirewallBadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+
+  FirewallTrafficFilterV2:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasHttpCodeLimiting
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/firewall-lambdas/httpcodes.yml
+      Parameters:
+        # unsafe to use shim method here since EnvironmentName is used for an
+        # import
+        EnvironmentName: !Ref EnvironmentName
+        CloudFrontDistributionId: !Ref CloudFrontDistribution
+        # shim lite?
+        FunctionName: !Sub ${EnvNamespace}-${ProjectName}-waf-auto-httpcode
+        ManualAllowIPSet: !GetAtt FirewallV2.Outputs.ManualAllowIPSet
+        ManualBlockIPSet: !GetAtt FirewallV2.Outputs.ManualBlockIPSet
+        AutoBlockIPSet: !GetAtt FirewallV2.Outputs.AutoBlockIPSet
+        ManualAllowIPSetArn: !GetAtt FirewallV2.Outputs.ManualAllowIPSetArn
+        ManualBlockIPSetArn: !GetAtt FirewallV2.Outputs.ManualBlockIPSetArn
+        AutoBlockIPSetArn: !GetAtt FirewallV2.Outputs.AutoBlockIPSetArn
+        AccessLogBucket: !Ref LoggingBucket
+        AccessLogKeyPrefix: !Sub cloudfront/
+        BlockSeconds: !Ref FirewallBadResponseCodesBlockSeconds
+        BadResponseCodesRegex: !Ref FirewallBadResponseCodesRegex
+        BadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+
+  4xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 4xxErrorRate
+        Threshold: !Ref 4xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        AlarmLevel: !Ref 4xxAlarmLevel
+        AlarmTarget: !Ref AlarmTarget
+        ProjectName: !Ref ProjectName
+
+  5xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 5xxErrorRate
+        Threshold: !Ref 5xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        AlarmLevel: !Ref 5xxAlarmLevel
+        AlarmTarget: !Ref AlarmTarget
+        ProjectName: !Ref ProjectName
+
+Outputs:
+  CloudFrontDistributionDomainName:
+    Description: DNS name for the CloudFront distribution
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: The ID of the created cloudfront distribution
+    Value: !Ref CloudFrontDistribution

@@ -1,0 +1,119 @@
+Description: Creates a Kinesis Firehose to S3.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the firehose. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  DeliveryStreamName:
+    Description: The name of the delivery stream.
+    Type: String
+
+  S3BucketName:
+    Description: The name of the S3 bucket where data is written.
+    Type: String
+
+  S3Prefix:
+    Description: The prefix to append to the S3 files created by the firehose.
+    Type: String
+
+  S3CompressionFormat:
+    Description: The compression format for the intermediate S3 files.
+    Type: String
+    AllowedValues: [UNCOMPRESSED, GZIP]
+    Default: UNCOMPRESSED
+
+  BufferingIntervalInSeconds:
+    Description: The number of seconds to wait before delivering to S3.
+    Type: Number
+    Default: 300
+
+  BufferingSizeInMBs:
+    Description: The number of MBs to accumulate in the firehose before delivering to S3.
+    Type: Number
+    Default: 10
+
+Resources:
+
+  DeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub ${EnvironmentName}-${DeliveryStreamName}
+      DeliveryStreamType: DirectPut
+      S3DestinationConfiguration:
+        BucketARN: !Sub arn:aws:s3:::${S3BucketName}
+        Prefix: !Ref S3Prefix
+        CompressionFormat: !Ref S3CompressionFormat
+        BufferingHints:
+          IntervalInSeconds: !Ref BufferingIntervalInSeconds
+          SizeInMBs: !Ref BufferingSizeInMBs
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref LogGroup
+          LogStreamName: !Ref S3DeliveryLogStream
+        RoleARN: !GetAtt DeliveryRole.Arn
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${EnvironmentName}-${DeliveryStreamName}-firehose
+      RetentionInDays: 30
+
+  S3DeliveryLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogStreamName: s3-delivery
+      LogGroupName: !Ref LogGroup
+
+  DeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-${DeliveryStreamName}-firehose
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: firehose.amazonaws.com
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucketMultipartUploads
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Sub arn:aws:s3:::${S3BucketName}
+                  - !Sub arn:aws:s3:::${S3BucketName}/*
+        - PolicyName: cloudwatch-logs-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroup}:log-stream:*
+
+Outputs:
+
+  DeliveryStreamName:
+    Description: The name of the firehose delivery stream.
+    Value: !Ref DeliveryStream

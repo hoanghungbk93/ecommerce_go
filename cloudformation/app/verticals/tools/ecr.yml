@@ -1,0 +1,394 @@
+Description: Creates ECR repositories for Influencer Tools.
+
+Resources:
+
+  ApplicationsCoreObjectService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/core-object-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsRewardstyle:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/rewardstyle
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsCoLegacy:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/co-legacy
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsCoApi:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/co-api
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsCoWidgets:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/co-widgets
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsCensus:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/census
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsRsTheConference:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/rstheconf
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  ApplicationsRsUiLibrary:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tools/applications/rs-ui-library
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  InfluencerReportsService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: influencer-reports-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+
+  TastemakerReporting:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: tastemaker-reporting
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+

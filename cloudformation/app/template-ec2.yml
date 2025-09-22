@@ -1,0 +1,326 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates the ECS application resources for ecommerce-app using EC2 and S3-hosted shared templates
+
+Parameters:
+  CloudformationBaseUrl:
+    Description: Base URL for the shared CloudFormation templates
+    Type: String
+    Default: https://s3.amazonaws.com/ecommerce-cloudformation-templates-142473567235/templates/shared
+
+  EnvironmentName:
+    Description: The name of the target environment
+    Type: String
+    AllowedValues: [dev, prod]
+
+  ImageUrl:
+    Description: The ECR repository URL
+    Type: String
+
+  GitSha:
+    Description: The GitSha of commit project
+    Type: String
+
+  # ECS Cluster Parameters
+  InstanceType:
+    Description: EC2 instance type for ECS cluster (Free Tier optimized)
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t4g.micro
+      - t3.small
+
+  ClusterMinSize:
+    Description: Minimum number of EC2 instances in the cluster
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  ClusterMaxSize:
+    Description: Maximum number of EC2 instances in the cluster
+    Type: Number
+    Default: 3
+
+  ClusterDesiredCapacity:
+    Description: Desired number of instances (-1 to leave unchanged)
+    Type: Number
+    Default: 1
+
+  # Service Parameters
+  BackendCPU:
+    Description: CPU units for backend service
+    Type: Number
+    Default: 256
+
+  BackendMemoryReservation:
+    Description: Memory reservation for backend service (soft limit)
+    Type: Number
+    Default: 256
+
+  FrontendCPU:
+    Description: CPU units for frontend service
+    Type: Number
+    Default: 256
+
+  FrontendMemoryReservation:
+    Description: Memory reservation for frontend service (soft limit)
+    Type: Number
+    Default: 256
+
+  BackendDesiredCount:
+    Description: Desired number of backend tasks (-1 to leave unchanged)
+    Type: Number
+    Default: 1
+
+  FrontendDesiredCount:
+    Description: Desired number of frontend tasks (-1 to leave unchanged)
+    Type: Number
+    Default: 1
+
+  BackendMinCapacity:
+    Description: Minimum number of backend tasks
+    Type: Number
+    Default: 1
+
+  BackendMaxCapacity:
+    Description: Maximum number of backend tasks
+    Type: Number
+    Default: 4
+
+  FrontendMinCapacity:
+    Description: Minimum number of frontend tasks
+    Type: Number
+    Default: 1
+
+  FrontendMaxCapacity:
+    Description: Maximum number of frontend tasks
+    Type: Number
+    Default: 4
+
+  KeyPairName:
+    Description: EC2 Key Pair for SSH access
+    Type: String
+    Default: ecommerce-key
+
+  ECSOptimizedAMI:
+    Description: ECS Optimized AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
+
+  VerticalName:
+    Description: The name of the vertical (lowercase)
+    Type: String
+    Default: ecommerce
+    AllowedPattern: "[a-z]+"
+
+  SubEnvironmentName:
+    Description: Sub-environment name (optional)
+    Type: String
+    Default: ""
+
+  DomainName:
+    Description: Domain name for the ALB (optional)
+    Type: String
+    Default: ""
+
+  AlarmTarget:
+    Description: Alarm target for notifications
+    Type: String
+    Default: low
+
+Conditions:
+  HasClusterDesiredCapacity: !Not [!Equals [!Ref ClusterDesiredCapacity, -1]]
+  HasBackendDesiredCount: !Not [!Equals [!Ref BackendDesiredCount, -1]]
+  HasFrontendDesiredCount: !Not [!Equals [!Ref FrontendDesiredCount, -1]]
+
+Resources:
+  # Task Role for ECS tasks
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-ecommerce-ec2-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      Policies:
+        - PolicyName: !Sub ${EnvironmentName}-ecommerce-s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub 'arn:aws:s3:::{{resolve:ssm:/${EnvironmentName}/ecommerce/s3/bucket}}'
+                  - !Sub 'arn:aws:s3:::{{resolve:ssm:/${EnvironmentName}/ecommerce/s3/bucket}}/*'
+        - PolicyName: !Sub "${AWS::StackName}-ssm-access"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentName}/ecommerce/*"
+
+  # SNS Topics for notifications
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-ecommerce-notifications
+
+  NotificationTopicParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/sns/notifications-arn
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref NotificationTopic
+
+  # ECS Cluster using shared template from S3
+  ECSCluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudformationBaseUrl}/ecs/service-cluster.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        VerticalName: !Ref VerticalName
+        ClusterName: ecommerce
+        InstanceType: !Ref InstanceType
+        MinSize: !Ref ClusterMinSize
+        MaxSize: !Ref ClusterMaxSize
+        DesiredCapacity: !If
+          - HasClusterDesiredCapacity
+          - !Ref ClusterDesiredCapacity
+          - !Ref AWS::NoValue
+        ScaleUpThreshold: 80
+        ScaleDownThreshold: 30
+        VPCZoneIdentifier: "subnet-095a264d86c3670bb,subnet-0192656fc2b518bf9,subnet-07a3b902dc925f6e4"
+        SecurityGroups: !Sub "{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}"
+        CapacityTooHighThreshold: 0
+
+  # Application Load Balancer using shared template from S3
+  ALB:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudformationBaseUrl}/load-balancers/alb.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        VerticalName: !Ref VerticalName
+        LoadBalancerName: ecommerce
+        Scheme: internet-facing
+        DomainName: !Ref DomainName
+        AlarmTarget: !Ref AlarmTarget
+        LatencyAlarmThreshold: 0
+        TypicalFailureRateThreshold: 0
+        StrictFailureRateThreshold: 0
+        PublicSubnets: "subnet-095a264d86c3670bb,subnet-0192656fc2b518bf9,subnet-07a3b902dc925f6e4"
+        VpcId: "vpc-0669e01e74e0eada3"
+        DefaultSecurityGroup: !Sub "{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}"
+        CreateDNS: "false"
+
+
+  # Backend ECS Service using shared template from S3
+  BackendService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudformationBaseUrl}/ecs/service.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        VerticalName: !Ref VerticalName
+        ServiceName: ecommerce-backend
+        Cluster: !GetAtt ECSCluster.Outputs.ClusterName
+        MinCapacity: !Ref BackendMinCapacity
+        MaxCapacity: !Ref BackendMaxCapacity
+        DesiredCount: !If
+          - HasBackendDesiredCount
+          - !Ref BackendDesiredCount
+          - !Ref AWS::NoValue
+        CPU: !Ref BackendCPU
+        MemoryReservation: !Ref BackendMemoryReservation
+        ContainerUrl: !Sub "${ImageUrl}/backend:${GitSha}"
+        TargetGroup: !GetAtt ALB.Outputs.BackendTargetGroup
+        TaskRole: !Ref TaskRole
+        ScaleUpThreshold: 80
+        ScaleDownThreshold: 30
+        EnableCloudWatchLogging: true
+        ContainerPort: 8080
+        CapacityTooHighThreshold: 0
+
+  # Frontend ECS Service using shared template from S3
+  FrontendService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudformationBaseUrl}/ecs/service.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        VerticalName: !Ref VerticalName
+        ServiceName: ecommerce-frontend
+        Cluster: !GetAtt ECSCluster.Outputs.ClusterName
+        MinCapacity: !Ref FrontendMinCapacity
+        MaxCapacity: !Ref FrontendMaxCapacity
+        DesiredCount: !If
+          - HasFrontendDesiredCount
+          - !Ref FrontendDesiredCount
+          - !Ref AWS::NoValue
+        CPU: !Ref FrontendCPU
+        MemoryReservation: !Ref FrontendMemoryReservation
+        ContainerUrl: !Sub "${ImageUrl}/frontend:${GitSha}"
+        TargetGroup: !GetAtt ALB.Outputs.FrontendTargetGroup
+        TaskRole: !Ref TaskRole
+        ScaleUpThreshold: 80
+        ScaleDownThreshold: 30
+        EnableCloudWatchLogging: true
+        ContainerPort: 80
+        CapacityTooHighThreshold: 0
+
+  # SSM Parameters for application URLs
+  BackendUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/backend/url
+      Type: String
+      Value: !Sub http://${ALB.Outputs.LoadBalancerUrl}:8080
+
+  FrontendUrlParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/ecommerce/frontend/url
+      Type: String
+      Value: !Sub http://${ALB.Outputs.LoadBalancerUrl}
+
+  # Note: Database, JWT, VNPay, and Google OAuth parameters are created by the database stack
+  # and will be referenced by the ECS services automatically
+
+Outputs:
+  BackendUrl:
+    Description: Backend Service URL
+    Value: !Sub http://${ALB.Outputs.LoadBalancerUrl}:8080
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-ec2-backend-url
+
+  FrontendUrl:
+    Description: Frontend Service URL
+    Value: !Sub http://${ALB.Outputs.LoadBalancerUrl}
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-ec2-frontend-url
+
+  ClusterName:
+    Description: ECS Cluster Name
+    Value: !GetAtt ECSCluster.Outputs.ClusterName
+    Export:
+      Name: !Sub ${EnvironmentName}-ecommerce-ec2-cluster
+
+  LoadBalancerDNS:
+    Description: Application Load Balancer DNS
+    Value: !GetAtt ALB.Outputs.LoadBalancerUrl
+

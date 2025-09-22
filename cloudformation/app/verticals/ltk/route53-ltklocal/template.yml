@@ -1,0 +1,30 @@
+Description: Creates Route53 entries for LTK usage.
+
+Mappings:
+
+  VPCs:
+    qa-old:
+      VPCId: vpc-91b186f5
+    qa-new:
+      VPCId: vpc-3752c54e
+    prod:
+      VPCId: vpc-c3b384a7
+
+Resources:
+
+  HostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: ltklocal
+      HostedZoneConfig:
+        Comment: Hosted zone for internal LTK resources.
+      VPCs:
+        - VPCId: !FindInMap [VPCs, qa-old, VPCId]
+          VPCRegion: ap-southeast-1
+        - VPCId: !FindInMap [VPCs, qa-new, VPCId]
+          VPCRegion: ap-southeast-1
+        - VPCId: !FindInMap [VPCs, prod, VPCId]
+          VPCRegion: ap-southeast-1
+      HostedZoneTags:
+        - Key: Vertical
+          Value: LTK

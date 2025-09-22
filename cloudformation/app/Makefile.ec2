@@ -1,0 +1,122 @@
+# EC2-based ECS deployment targets
+.PHONY: deploy-ec2-dev deploy-ec2-prod validate-ec2 describe-ec2-dev describe-ec2-prod delete-ec2-dev delete-ec2-prod
+
+# Variables
+EC2_TEMPLATE := template-ec2.yml
+DEV_EC2_PARAMS := dev-ec2.json
+PROD_EC2_PARAMS := prod-ec2.json
+REGION := ap-southeast-1
+
+# Deploy to development with EC2
+deploy-ec2-dev:
+	@echo "🚀 Deploying ecommerce app to DEV with EC2+ECS..."
+	aws cloudformation deploy \
+		--template-file $(EC2_TEMPLATE) \
+		--stack-name dev-ecommerce-ec2-app \
+		--parameter-overrides file://$(DEV_EC2_PARAMS) \
+		--capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+		--region $(REGION) \
+		--no-fail-on-empty-changeset
+	@echo "✅ Development deployment complete!"
+	@$(MAKE) -f Makefile.ec2 describe-ec2-dev
+
+# Deploy to production with EC2
+deploy-ec2-prod:
+	@echo "🚀 Deploying ecommerce app to PROD with EC2+ECS..."
+	aws cloudformation deploy \
+		--template-file $(EC2_TEMPLATE) \
+		--stack-name prod-ecommerce-ec2-app \
+		--parameter-overrides file://$(PROD_EC2_PARAMS) \
+		--capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+		--region $(REGION) \
+		--no-fail-on-empty-changeset
+	@echo "✅ Production deployment complete!"
+	@$(MAKE) -f Makefile.ec2 describe-ec2-prod
+
+# Validate EC2 template
+validate-ec2:
+	@echo "📋 Validating EC2 CloudFormation template..."
+	aws cloudformation validate-template \
+		--template-body file://$(EC2_TEMPLATE) \
+		--region $(REGION)
+	@echo "✅ Template is valid!"
+
+# Show development stack info
+describe-ec2-dev:
+	@echo "📄 Development Stack Outputs:"
+	aws cloudformation describe-stacks \
+		--stack-name dev-ecommerce-ec2-app \
+		--query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+		--output table \
+		--region $(REGION) 2>/dev/null || echo "Stack not found"
+
+# Show production stack info
+describe-ec2-prod:
+	@echo "📄 Production Stack Outputs:"
+	aws cloudformation describe-stacks \
+		--stack-name prod-ecommerce-ec2-app \
+		--query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
+		--output table \
+		--region $(REGION) 2>/dev/null || echo "Stack not found"
+
+# Delete development stack
+delete-ec2-dev:
+	@echo "🗑️  Deleting DEV EC2 stack..."
+	aws cloudformation delete-stack \
+		--stack-name dev-ecommerce-ec2-app \
+		--region $(REGION)
+	@echo "⏳ Waiting for stack deletion..."
+	aws cloudformation wait stack-delete-complete \
+		--stack-name dev-ecommerce-ec2-app \
+		--region $(REGION)
+	@echo "✅ DEV stack deleted!"
+
+# Delete production stack
+delete-ec2-prod:
+	@echo "🗑️  Deleting PROD EC2 stack..."
+	aws cloudformation delete-stack \
+		--stack-name prod-ecommerce-ec2-app \
+		--region $(REGION)
+	@echo "⏳ Waiting for stack deletion..."
+	aws cloudformation wait stack-delete-complete \
+		--stack-name prod-ecommerce-ec2-app \
+		--region $(REGION)
+	@echo "✅ PROD stack deleted!"
+
+# Show stack events for debugging
+events-ec2-dev:
+	aws cloudformation describe-stack-events \
+		--stack-name dev-ecommerce-ec2-app \
+		--region $(REGION) \
+		--query 'StackEvents[0:10].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+		--output table
+
+events-ec2-prod:
+	aws cloudformation describe-stack-events \
+		--stack-name prod-ecommerce-ec2-app \
+		--region $(REGION) \
+		--query 'StackEvents[0:10].[Timestamp,LogicalResourceId,ResourceStatus,ResourceStatusReason]' \
+		--output table
+
+# Quick status check
+status-ec2:
+	@echo "📊 EC2 Stack Status:"
+	@echo "DEV:"
+	@aws cloudformation describe-stacks --stack-name dev-ecommerce-ec2-app --query 'Stacks[0].StackStatus' --output text --region $(REGION) 2>/dev/null || echo "Not deployed"
+	@echo "PROD:"
+	@aws cloudformation describe-stacks --stack-name prod-ecommerce-ec2-app --query 'Stacks[0].StackStatus' --output text --region $(REGION) 2>/dev/null || echo "Not deployed"
+
+# Help
+help-ec2:
+	@echo "Available EC2 deployment commands:"
+	@echo "  make -f Makefile.ec2 deploy-ec2-dev     - Deploy to development with EC2+ECS"
+	@echo "  make -f Makefile.ec2 deploy-ec2-prod    - Deploy to production with EC2+ECS"
+	@echo "  make -f Makefile.ec2 validate-ec2       - Validate CloudFormation template"
+	@echo "  make -f Makefile.ec2 describe-ec2-dev   - Show development stack outputs"
+	@echo "  make -f Makefile.ec2 describe-ec2-prod  - Show production stack outputs"
+	@echo "  make -f Makefile.ec2 delete-ec2-dev     - Delete development stack"
+	@echo "  make -f Makefile.ec2 delete-ec2-prod    - Delete production stack"
+	@echo "  make -f Makefile.ec2 events-ec2-dev     - Show recent dev stack events"
+	@echo "  make -f Makefile.ec2 events-ec2-prod    - Show recent prod stack events"
+	@echo "  make -f Makefile.ec2 status-ec2         - Quick status check"
+	@echo "  make -f Makefile.ec2 help-ec2           - Show this help"

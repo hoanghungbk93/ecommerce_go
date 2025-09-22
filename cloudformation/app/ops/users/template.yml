@@ -1,0 +1,99 @@
+Description: Creates IAM users for vertical ops
+
+Conditions:
+    EnableCircleArtificer: !Equals [!Ref "AWS::AccountId", ""]
+
+Resources:
+
+  #################
+  ##### Bots ######
+  #################
+
+  CircleArtificer:
+    Type: AWS::IAM::User
+    Condition:
+      - EnableCircleArtificer
+    Properties:
+      PathPrefix: /ops/
+      UserName: circle-artificer
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AWSCloudFormationReadOnlyAccess"
+        - "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+      Policies:
+        - PolicyName: deny-billing-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - aws-portal:*
+                  - budgets:*
+                Resource: "*"
+        - PolicyName: deny-iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - iam:*Group
+                  - iam:*GroupPolicy
+                  - iam:AddUserToGroup
+                  - iam:RemoveUserFromGroup
+                  - iam:*LoginProfile
+                  - iam:ChangePassword
+                  - iam:*AccountPasswordPolicy
+                  - iam:*MFADevice
+                  - iam:*OpenIDConnectProvider
+                  - iam:UpdateOpenIDConnectProviderThumbprint
+                  - iam:UpdateServiceSpecificCredential
+                  - iam:*AccountAlias
+                  - iam:*SAMLProvider
+                  - iam:*SSHPublicKey
+                  - iam:*Certificate
+                  - iam:*CredentialReport
+                  - iam:Upload*
+                Resource: "*"
+
+  Ops:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ltk-ops
+      Policies:
+        - PolicyName: allow-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: "*"
+                Resource: "*"
+        - PolicyName: deny-billing-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - aws-portal:*
+                  - budgets:*
+                Resource: "*"
+        - PolicyName: deny-iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - iam:*User
+                  - iam:*UserPolicy
+                  - iam:*Group
+                  - iam:*GroupPolicy
+                  - iam:AddUserToGroup
+                  - iam:RemoveUserFromGroup
+                  - iam:*LoginProfile
+                  - iam:ChangePassword
+                  - iam:*AccountPasswordPolicy
+                  - iam:*MFADevice
+                  - iam:*AccessKey
+                  - iam:*OpenIDConnectProvider
+                  - iam:UpdateOpenIDConnectProviderThumbprint
+                  - iam:UpdateServiceSpecificCredential
+                  - iam:*AccountAlias
+                  - iam:*SAMLProvider
+                  - iam:*SSHPublicKey
+                  - iam:*Certificate
+                  - iam:*CredentialReport
+                  - iam:Upload*
+                Resource: "*"

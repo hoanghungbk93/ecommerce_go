@@ -1,0 +1,95 @@
+Description: Creates a Regional Web Application Firewall with auto and manual block ipsets rules on an ALB resource
+
+
+Parameters:
+
+  Namespace:
+    Type: String
+
+  LoadBalancerArn:
+    Type: String
+
+  LoadBalancerName:
+    Type: String
+
+  WebACLName:
+    Type: String
+    Default: ""
+
+
+Conditions:
+  HasWebACLName: !Not [!Equals [!Ref WebACLName, ""]]
+
+
+Resources:
+
+  ManualBlockIPSet:
+    Type: AWS::WAFRegional::IPSet
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual
+
+  AutoBlockIPSet:
+    Type: AWS::WAFRegional::IPSet
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}-auto
+
+  ManualBlockRule:
+    Type: AWS::WAFRegional::Rule
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual
+      MetricName: ManualBlockRule
+      Predicates:
+        - DataId: !Ref ManualBlockIPSet
+          Negated: false
+          Type: IPMatch
+
+  AutoBlockRule:
+    Type: AWS::WAFRegional::Rule
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}-auto
+      MetricName: AutoBlockRule
+      Predicates:
+        - DataId: !Ref AutoBlockIPSet
+          Negated: false
+          Type: IPMatch
+
+  WebACL:
+    Type: AWS::WAFRegional::WebACL
+    Properties:
+      Name: !If
+        - HasWebACLName
+        - !Ref WebACLName
+        - !Sub ${Namespace}-${LoadBalancerName}
+      DefaultAction:
+        Type: ALLOW
+      MetricName: Abusers
+      Rules:
+        - Action:
+            Type: BLOCK
+          Priority: 1
+          RuleId: !Ref ManualBlockRule
+        - Action:
+            Type: BLOCK
+          Priority: 2
+          RuleId: !Ref AutoBlockRule
+
+  WebACLAssociation:
+    Type: AWS::WAFRegional::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancerArn
+      WebACLId: !Ref WebACL
+
+
+Outputs:
+
+  WebACLId:
+    Description: Id of the web acl
+    Value: !Ref WebACL
+
+  AutoBlockIPSet:
+    Description: Id of the auto blocking IPSet
+    Value: !Ref AutoBlockIPSet
+
+  ManualBlockIPSet:
+    Description: Id of the manual blocking IPSet
+    Value: !Ref ManualBlockIPSet

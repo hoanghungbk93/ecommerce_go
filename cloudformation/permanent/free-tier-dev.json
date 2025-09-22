@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "RDSRootPassword",
+    "ParameterValue": "MySecurePass123!"
+  },
+  {
+    "ParameterKey": "InstanceClass",
+    "ParameterValue": "db.t3.micro"
+  },
+  {
+    "ParameterKey": "PubliclyAccessible",
+    "ParameterValue": "true"
+  }
+]

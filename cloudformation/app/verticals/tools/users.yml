@@ -1,0 +1,375 @@
+Description: Creates IAM groups, policies, and users for the influencer tools team.
+
+Parameters:
+
+  InitialPassword:
+    Description: The initial password for the users (MUST BE CHANGED!!!).
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  ####################
+  ##### Policies #####
+  ####################
+
+  SelfManagedIAMUserPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: self-managed-iam-access
+      Description: Allows IAM users to manage themselves and their MFA devices.
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:ChangePassword
+              - iam:GetAccountSummary
+              - iam:GetLoginProfile
+              - iam:CreateAccessKey
+              - iam:UpdateAccessKey
+              - iam:DeleteAccessKey
+              - iam:ListAccessKeys
+              - iam:*SSHPublicKey
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+          - Effect: Allow
+            Action:
+              - iam:CreateVirtualMFADevice
+              - iam:EnableMFADevice
+              - iam:ResyncMFADevice
+              - iam:DeleteVirtualMFADevice
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+          - Effect: Allow
+            Action:
+              - iam:DeactivateMFADevice
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: true
+          - Effect: Allow
+            Action:
+              - iam:ListVirtualMFADevices
+              - iam:ListMFADevices
+              - iam:ListUsers
+            Resource: "*"
+
+  ####################
+  ###### Groups ######
+  ####################
+
+  DevGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: influencer-tools-developers
+      ManagedPolicyArns:
+        - !Ref SelfManagedIAMUserPolicy
+      Policies:
+        - PolicyName: self-manage-user
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:ChangePassword
+                  - iam:GetAccountSummary
+                  - iam:GetLoginProfile
+                  - iam:CreateAccessKey
+                  - iam:UpdateAccessKey
+                  - iam:DeleteAccessKey
+                  - iam:ListAccessKeys
+                  - iam:*SSHPublicKey
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+              - Effect: Allow
+                Action:
+                  - iam:CreateVirtualMFADevice
+                  - iam:EnableMFADevice
+                  - iam:ResyncMFADevice
+                  - iam:DeleteVirtualMFADevice
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+              - Effect: Allow
+                Action:
+                  - iam:DeactivateMFADevice
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+                Condition:
+                  Bool:
+                    aws:MultiFactorAuthPresent: true
+              - Effect: Allow
+                Action:
+                  - iam:ListVirtualMFADevices
+                  - iam:ListMFADevices
+                  - iam:ListUsers
+                Resource: "*"
+        - PolicyName: tagged-resources-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: "*"
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    "*:ResourceTag/Vertical": tools
+        - PolicyName: sqs-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: sqs:*
+                Resource:
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:dev-tools-*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:qa-tools-*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:prod-tools-*
+        - PolicyName: cloudformation-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/dev-tools-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/qa-tools-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/prod-tools-*
+        - PolicyName: ssm-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                  - ssm:DescribeParameters
+                  - ssm:GetParameterHistory
+                Resource: "*"
+        - PolicyName: lambda-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                Resource:
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:dev-tools-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:qa-tools-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:prod-tools-*
+        - PolicyName: ecr-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecr:*
+                Resource:
+                  - !Sub arn:aws:ecr:*:${AWS::AccountId}:repository/tools-*
+        - PolicyName: xray-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:Get*
+                  - xray:BatchGetTraces
+                Resource: '*'
+
+  QaGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: influencer-tools-qa
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonSQSReadOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+        - !Ref SelfManagedIAMUserPolicy
+      Policies:
+        - PolicyName: tagged-resources-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "acm:Describe*"
+                  - "acm:List*"
+                  - "acm:Get*"
+                  - "autoscaling:Describe*"
+                  - "autoscaling:List*"
+                  - "autoscaling:Get*"
+                  - "batch:Describe*"
+                  - "batch:List*"
+                  - "batch:Get*"
+                  - "cloudformation:Describe*"
+                  - "cloudformation:List*"
+                  - "cloudformation:Get*"
+                  - "cloudfront:Describe*"
+                  - "cloudfront:List*"
+                  - "cloudfront:Get*"
+                  - "cloudwatch:Describe*"
+                  - "cloudwatch:List*"
+                  - "cloudwatch:Get*"
+                  - "datapipeline:Describe*"
+                  - "datapipeline:List*"
+                  - "datapipeline:Get*"
+                  - "ec2:Describe*"
+                  - "ec2:List*"
+                  - "ec2:Get*"
+                  - "ecs:Describe*"
+                  - "ecs:List*"
+                  - "ecs:Get*"
+                  - "elasticache:Describe*"
+                  - "elasticache:List*"
+                  - "elasticache:Get*"
+                  - "elasticloadbalancing:Describe*"
+                  - "elasticloadbalancing:List*"
+                  - "elasticloadbalancing:Get*"
+                  - "es:Describe*"
+                  - "es:List*"
+                  - "es:Get*"
+                  - "firehose:Describe*"
+                  - "firehose:List*"
+                  - "firehose:Get*"
+                  - "kinesis:Describe*"
+                  - "kinesis:List*"
+                  - "kinesis:Get*"
+                  - "kinesisanalytics:Describe*"
+                  - "kinesisanalytics:List*"
+                  - "kinesisanalytics:Get*"
+                  - "lambda:Describe*"
+                  - "lambda:List*"
+                  - "lambda:Get*"
+                  - "logs:Describe*"
+                  - "logs:List*"
+                  - "logs:Get*"
+                  - "rds:Describe*"
+                  - "rds:List*"
+                  - "rds:Get*"
+                  - "redshift:Describe*"
+                  - "redshift:List*"
+                  - "redshift:Get*"
+                  - "sns:Describe*"
+                  - "sns:List*"
+                  - "sns:Get*"
+                  - "sqs:Describe*"
+                  - "sqs:List*"
+                  - "sqs:Get*"
+                  - "ssm:Describe*"
+                  - "ssm:List*"
+                  - "ssm:Get*"
+                  - "waf:Describe*"
+                  - "waf:List*"
+                  - "waf:Get*"
+                  - "waf-regional:Describe*"
+                  - "waf-regional:List*"
+                  - "waf-regional:Get*"
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    "*:ResourceTag/Vertical": tools
+        - PolicyName: ssm-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:DescribeParameters
+                  - ssm:GetParameterHistory
+                Resource: "*"
+
+  AdminGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: influencer-tools-admins
+      ManagedPolicyArns:
+        - !Ref SelfManagedIAMUserPolicy
+      Policies:
+        - PolicyName: iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: iam:*
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/tools-*
+              - Effect: Allow
+                Action:
+                  - iam:GenerateServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetailsWithEntities
+                  - iam:ListPoliciesGrantingServiceAccess
+                Resource: "*"
+
+  BillManagerGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: influencer-tools-bill-managers
+      ManagedPolicyArns:
+        - !Ref SelfManagedIAMUserPolicy
+      Policies:
+        - PolicyName: AllowBilling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aws-portal:ViewUsage
+                  - aws-portal:ViewBilling
+                  - aws-portal:DescribeReportDefinition
+                  - aws-portal:PutReportDefinition
+                  - aws-portal:DeleteReportDefinition
+                  - aws-portal:ViewBudget
+                Resource: "*"
+
+  ###################
+  ###### Users ######
+  ###################
+
+  FloydArguello:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: floyd.arguello
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+        - !Ref AdminGroup
+        - !Ref BillManagerGroup
+
+  MikeDunn:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: mike.dunn
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  DrewHarris:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: drew.harris
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  AaronManley:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: aaron.manley
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  MichaelKiss:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: michael.kiss
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref QaGroup

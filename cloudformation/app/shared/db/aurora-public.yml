@@ -1,0 +1,981 @@
+Description: Creates an Aurora cluster.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Description: The name of the subenvironment.
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the Aurora cluster. This should be lower
+      cased as the vertical name is used in the naming convention of various resources.
+    Type: String
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ClusterName:
+    Description: The name of the Aurora cluster.
+    Type: String
+
+  DatabaseName:
+    Description: The name of the database on the Aurora cluster.
+    Type: String
+
+  InstanceClass:
+    Description: The Aurora instance class.
+    Type: String
+    Default: db.t2.small
+
+  Engine:
+    Description: >-
+      The type of Aurora DB to use. The version is automatically determined by
+      the type.
+    Type: String
+    AllowedValues:
+      [
+        aurora,
+        aurora-mysql,
+        aurora-mysql-8,
+        aurora-postgresql,
+        aurora-postgresql13,
+        aurora-serverless,
+        aurora-mysql-serverless,
+        aurora-postgresql-serverless,
+      ]
+    Default: aurora
+
+  RootPassword:
+    Description: The root user's password.
+    Type: String
+    NoEcho: true
+
+  CPUHighThreshold:
+    Description: The threshold at which the CPU metric triggers an alarm (percent).
+    Type: Number
+    Default: 80
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the CPU metric is sampled.
+    Type: Number
+    Default: 300
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 1
+
+  ReadIOPSHighThreshold:
+    Description: >
+      The threshold at which the Aurora cluster's read IOPS triggers an alarm (count/second).
+      Set to 0 to disable the alarm.
+    Type: Number
+
+  ReadIOPSHighPeriod:
+    Description: The number of seconds over which the Aurora cluster's read IOPS are sampled.
+    Type: Number
+    Default: 300
+
+  ReadIOPSHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified read IOPS threshold.
+    Type: Number
+    Default: 1
+
+  ReadIOPSHighUrgency:
+    Description: >
+      The level of the V2 alarm to appear in the alarm description for severity routing purposes.
+      If not using an alarm target, this value is ignored and the v1 low/critical routing logic
+      will be used instead.
+    Type: String
+    AllowedPattern: "(?i:crit(ical)?|err(or)?|warn(ing)?|low|info)"
+    Default: "critical"
+
+  WriteIOPSHighThreshold:
+    Description: >
+      The threshold at which the Aurora cluster's write IOPS triggers an alarm (count/second).
+      Set to 0 to disable the alarm.
+    Type: Number
+
+  WriteIOPSHighPeriod:
+    Description: The number of seconds over which the Aurora cluster's write IOPS are sampled.
+    Type: Number
+    Default: 300
+
+  WriteIOPSHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified write IOPS threshold.
+    Type: Number
+    Default: 1
+
+  WriteIOPSHighUrgency:
+    Description: >
+      The level of the V2 alarm to appear in the alarm description for severity routing purposes.
+      If not using an alarm target, this value is ignored and the v1 low/critical routing logic
+      will be used instead.
+    Type: String
+    AllowedPattern: "(?i:crit(ical)?|err(or)?|warn(ing)?|low|info)"
+    Default: "critical"
+
+  SelectLatencyHighThreshold:
+    Description: The threshold at which the Aurora cluster's select latency triggers an alarm (milliseconds).
+    Type: Number
+
+  SelectLatencyHighPeriod:
+    Description: The number of seconds over which the Aurora cluster's select latency is sampled.
+    Type: Number
+    Default: 300
+
+  SelectLatencyHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified select latency threshold.
+    Type: Number
+    Default: 1
+
+  DMLLatencyHighThreshold:
+    Description: The threshold at which the Aurora cluster's insert/update/delete latency triggers an alarm (milliseconds).
+    Type: Number
+
+  DMLLatencyHighPeriod:
+    Description: The number of seconds over which the Aurora cluster's insert/update/delete latency is sampled.
+    Type: Number
+    Default: 300
+
+  DMLLatencyHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified DML latency threshold.
+    Type: Number
+    Default: 1
+
+  MonitoringIntervalInSeconds:
+    Description: >
+      The interval, in seconds, between points when Enhanced Monitoring metrics
+      are collected for the DB instance. To disable collecting Enhanced
+      Monitoring metrics, specify 0. The default is 0.
+    Type: Number
+    Default: 0
+    AllowedValues: [0, 1, 5, 10, 15, 30, 60]
+
+  DBClusterSnapshotIdentifier:
+    Type: String
+    Default: ""
+    Description: >
+      The identifier for the DB cluster snapshot from which you want to restore.
+
+  EnableServiceDiscovery:
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  MaxWorkerProcesses:
+    Description: >-
+      The number of parallel worker processes allowed. For PostgreSQL.
+    Type: Number
+    MinValue: 0
+    Default: 0
+
+  EnableDmsSupport:
+    Type: String
+    Description: Optional parameter to enable DMS support. To enable DMS support, specify "true". The default is disabled.
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    ConstraintDescription: must specify "true" or "false".
+
+  EnablePerformanceInsights:
+    Type: String
+    Description: Optional parameter to enable Performance Insights. To enable Performance Insights support, specify "true". The default is "false" (disabled).
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  PerformanceInsightsRetentionPeriod:
+    Description: The amount of time, in days, to retain Performance Insights data.
+    Type: Number
+    Default: 7
+    MinValue: 7
+    MaxValue: 731
+
+  ScalingConfigurationAutoPause:
+    Description: >
+      A value that indicates whether to allow or disallow automatic pause for an Aurora DB cluster
+      in serverless DB engine mode. A DB cluster can be paused only when it has no connections.
+      If the DB is paused, your connection/session timeouts may need to be as high as 60 seconds.
+      Note that AWS API gateway has a hard timeout limit of 29 seconds.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  ScalingConfigurationMinCapacity:
+    Description: >
+      The minimum capacity for an Aurora DB cluster in serverless DB engine mode.
+      For Aurora MySQL, valid capacity values are 1, 2, 4, 8, 16, 32, 64, 128, and 256.
+      For Aurora PostgreSQL, valid capacity values are 2, 4, 8, 16, 32, 64, 192, and 384.
+    Type: Number
+    Default: 1
+
+  ScalingConfigurationMaxCapacity:
+    Description: >
+      The minimum capacity for an Aurora DB cluster in serverless DB engine mode.
+      For Aurora MySQL, valid capacity values are 1, 2, 4, 8, 16, 32, 64, 128, and 256.
+      For Aurora PostgreSQL, valid capacity values are 2, 4, 8, 16, 32, 64, 192, and 384.
+    Type: Number
+    Default: 2
+
+  ScalingConfigurationSecondsUntilAutoPause:
+    Description: The time, in seconds, before an Aurora DB cluster in serverless mode is paused.
+    Type: Number
+    Default: -1
+
+  EnableDatadogEnhancedMonitoring:
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  VpcSecurityGroupIds:
+    Description: In your cloudformation template create your Database specific Security groups and provide the list of Security Group ID's for the database.
+    Type: CommaDelimitedList
+
+  SecurityAndArchitectureReviewApproved:
+    Description: Obtain review and approval from Security and architecture before this is implemented.
+    Type: String
+    AllowedValues: [true]
+
+Conditions:
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasClusterReadIopsHighAlarm: !Not [!Equals [0, !Ref ReadIOPSHighThreshold]]
+  HasClusterWriteIopsHighAlarm: !Not [!Equals [0, !Ref WriteIOPSHighThreshold]]
+  # NOTE: this would have to be updated for future versions as well i.e. 5.8
+  IsAurora2x: !Equals [!Ref Engine, aurora-mysql]
+  HasEnhancedMonitoring: !Not [!Equals [!Ref MonitoringIntervalInSeconds, 0]]
+  HasDBClusterSnapshotIdentifier: !And
+    - !Not [!Equals [!Ref EnvironmentName, prod]]
+    - !Not [!Equals [!Ref DBClusterSnapshotIdentifier, ""]]
+  HasDBName: !Not [!Equals [!Ref DatabaseName, ""]]
+  HasEngineMySQL:
+    !Or [
+      !Equals [!Ref Engine, aurora],
+      !Equals [!Ref Engine, aurora-serverless],
+      !Equals [!Ref Engine, aurora-mysql],
+      !Equals [!Ref Engine, aurora-mysql-8],
+      !Equals [!Ref Engine, aurora-mysql-serverless],
+    ]
+  # HasEnginePostgreSQL: !Equals [!Ref Engine, aurora-postgresql]
+  HasEnginePostgreSQL13: !Equals [!Ref Engine, aurora-postgresql13]
+  HasServiceDiscovery: !Equals [!Ref EnableServiceDiscovery, true]
+  HasMaxWorkerProcesses: !Not [!Equals [!Ref MaxWorkerProcesses, 0]]
+  HasDmsSupportEnabled: !Equals [!Ref EnableDmsSupport, "true"]
+  HasPerformanceInsightsEnabled: !Equals [!Ref EnablePerformanceInsights, "true"]
+  HasEngineMode:
+    !Not [!Equals [!FindInMap [EngineMap, !Ref Engine, EngineMode], ""]]
+  HasServerless:
+    !Equals [!FindInMap [EngineMap, !Ref Engine, EngineMode], serverless]
+  HasServerlessPauseTimeout:
+    !Not [!Equals [!Ref ScalingConfigurationSecondsUntilAutoPause, -1]]
+  HasPrimary: !Not [!Condition HasServerless]
+  HasReplica: !And [!Condition EnvIsProd, !Not [!Condition HasServerless]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+  HasDatadogEnhancedMonitoring: !And
+    - !Equals [!Ref EnableDatadogEnhancedMonitoring, true]
+    - !Not [!Condition HasEngineMySQL]
+  NeedsAdditionalPrimarySSMParams: !And
+    - !Condition HasPrimary
+    - !Condition HasDatadogEnhancedMonitoring
+  NeedsAdditionalReplicaSSMParams: !And
+    - !Condition HasReplica
+    - !Condition HasDatadogEnhancedMonitoring
+
+Mappings:
+  EngineMap:
+    aurora:
+      Engine: aurora
+      EngineVersion: "5.6" # 5.6.10a
+      EngineMode: ""
+      Port: 3306
+      ClusterParameterGroupFamily: aurora5.6
+      ParameterGroupFamily: aurora5.6
+    aurora-mysql:
+      Engine: aurora-mysql
+      EngineVersion: "5.7" # 5.7.12
+      EngineMode: ""
+      Port: 3306
+      ClusterParameterGroupFamily: aurora-mysql5.7
+      ParameterGroupFamily: aurora-mysql5.7
+    aurora-mysql-8:
+      Engine: aurora-mysql
+      EngineVersion: "8.0.mysql_aurora.3.01.0"
+      EngineMode: ""
+      Port: 3306
+      ClusterParameterGroupFamily: aurora-mysql8.0
+      ParameterGroupFamily: aurora-mysql8.0
+    aurora-postgresql:
+      Engine: aurora-postgresql
+      EngineVersion: "10.6"
+      EngineMode: ""
+      Port: 5432
+      ClusterParameterGroupFamily: aurora-postgresql10
+      ParameterGroupFamily: aurora-postgresql10
+    aurora-postgresql13:
+      Engine: aurora-postgresql
+      EngineVersion: "13.4"
+      EngineMode: ""
+      Port: 5432
+      ClusterParameterGroupFamily: aurora-postgresql13
+      ParameterGroupFamily: aurora-postgresql13
+    # serverless counterparts
+    aurora-serverless:
+      Engine: aurora
+      EngineVersion: "5.6.10a"
+      EngineMode: serverless
+      Port: 3306
+      ClusterParameterGroupFamily: aurora5.6
+      ParameterGroupFamily: aurora5.6
+    aurora-mysql-serverless:
+      Engine: aurora-mysql
+      EngineVersion: "5.7.mysql_aurora.2.07.1"
+      EngineMode: serverless
+      Port: 3306
+      ClusterParameterGroupFamily: aurora-mysql5.7
+      ParameterGroupFamily: aurora-mysql5.7
+    aurora-postgresql-serverless:
+      Engine: aurora-postgresql
+      EngineVersion: "10.7"
+      EngineMode: serverless
+      Port: 5432
+      ClusterParameterGroupFamily: aurora-postgresql10
+      ParameterGroupFamily: aurora-postgresql10
+  InstanceClasses:
+    # Last updated 2022-07-18
+    # Docs: https://aws.amazon.com/rds/instance-types/
+    # Aurora Specific Instance Types: https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Concepts.DBInstanceClass.html
+    # Burstable Performance
+    db.t2.micro: { CpuCount: 1 }
+    db.t2.small: { CpuCount: 1 }
+    db.t2.medium: { CpuCount: 2 }
+    db.t2.large: { CpuCount: 2 }
+    db.t2.xlarge: { CpuCount: 4 }
+    db.t2.2xlarge: { CpuCount: 8 }
+    db.t3.micro: { CpuCount: 2 }
+    db.t3.small: { CpuCount: 2 }
+    db.t3.medium: { CpuCount: 2 }
+    db.t3.large: { CpuCount: 2 }
+    db.t3.xlarge: { CpuCount: 4 }
+    db.t3.2xlarge: { CpuCount: 8 }
+    # db.t4g.micro: { CpuCount: 2 } - Not supported by Aurora
+    # db.t4g.small: { CpuCount: 2 } - Not supported by Aurora
+    db.t4g.medium: { CpuCount: 2 }
+    db.t4g.large: { CpuCount: 2 }
+    # db.t4g.xlarge: { CpuCount: 4 } - Not supported by Aurora
+    # db.t4g.2xlarge: { CpuCount: 8 } - Not supported by Aurora
+    # Memory Optimized
+    db.r3.large: { CpuCount: 2 }
+    db.r3.xlarge: { CpuCount: 4 }
+    db.r3.2xlarge: { CpuCount: 8 }
+    db.r3.4xlarge: { CpuCount: 16 }
+    db.r3.8xlarge: { CpuCount: 32 }
+    db.r4.large: { CpuCount: 2 }
+    db.r4.xlarge: { CpuCount: 4 }
+    db.r4.2xlarge: { CpuCount: 8 }
+    db.r4.4xlarge: { CpuCount: 16 }
+    db.r4.8xlarge: { CpuCount: 32 }
+    db.r4.16xlarge: { CpuCount: 64 }
+    db.r5.large: { CpuCount: 2 }
+    db.r5.xlarge: { CpuCount: 4 }
+    db.r5.2xlarge: { CpuCount: 8 }
+    db.r5.4xlarge: { CpuCount: 16 }
+    db.r5.8xlarge: { CpuCount: 32 }
+    db.r5.16xlarge: { CpuCount: 64 }
+    db.r5.24xlarge: { CpuCount: 96 }
+    db.r6g.large: {CpuCount: 2 }
+    db.r6g.xlarge: {CpuCount: 4 }
+    db.r6g.2xlarge: {CpuCount: 8 }
+    db.r6g.4xlarge: {CpuCount: 16 }
+    db.r6g.8xlarge: {CpuCount: 32 }
+    db.r6g.12xlarge: {CpuCount: 48 }
+    db.r6g.16xlarge: {CpuCount: 64 }
+    db.x2g.large: {CpuCount: 2 }
+    db.x2g.xlarge: {CpuCount: 4 }
+    db.x2g.2xlarge: {CpuCount: 8 }
+    db.x2g.4xlarge: {CpuCount: 16 }
+    db.x2g.8xlarge: {CpuCount: 32 }
+    db.x2g.12xlarge: {CpuCount: 48 }
+    db.x2g.16xlarge: {CpuCount: 64 }
+    db.x1e.xlarge: { CpuCount: 4 }
+    db.x1e.2xlarge: { CpuCount: 8 }
+    db.x1e.4xlarge: { CpuCount: 16 }
+    db.x1e.8xlarge: { CpuCount: 32 }
+    db.x1e.16xlarge: { CpuCount: 64 }
+    db.x1e.32xlarge: { CpuCount: 128 }
+    # General Purpose
+    db.m4.large: { CpuCount: 2 }
+    db.m4.xlarge: { CpuCount: 4 }
+    db.m4.2xlarge: { CpuCount: 8 }
+    db.m4.4xlarge: { CpuCount: 16 }
+    db.m4.10xlarge: { CpuCount: 40 }
+    db.m4.16xlarge: { CpuCount: 64 }
+    db.m5.large: { CpuCount: 2 }
+    db.m5.xlarge: { CpuCount: 4 }
+    db.m5.2xlarge: { CpuCount: 8 }
+    db.m5.4xlarge: { CpuCount: 16 }
+    db.m5.12xlarge: { CpuCount: 48 }
+    db.m5.24xlarge: { CpuCount: 96 }
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Cluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Retain
+    Properties:
+      SnapshotIdentifier: !If
+        - HasDBClusterSnapshotIdentifier
+        - !Ref DBClusterSnapshotIdentifier
+        - !Ref AWS::NoValue
+      DBClusterParameterGroupName: !Ref ClusterParameterGroup
+      DatabaseName: !If [HasDBName, !Ref DatabaseName, !Ref "AWS::NoValue"]
+      DeletionProtection: !If [EnvIsProd, true, !Ref "AWS::NoValue"]
+      Engine: !FindInMap [EngineMap, !Ref Engine, Engine]
+      EngineMode: !If
+        - HasEngineMode
+        - !FindInMap [EngineMap, !Ref Engine, EngineMode]
+        - !Ref AWS::NoValue
+      EngineVersion: !FindInMap [EngineMap, !Ref Engine, EngineVersion]
+      MasterUsername:
+        !If [HasDBClusterSnapshotIdentifier, !Ref "AWS::NoValue", root]
+      MasterUserPassword:
+        !If [
+          HasDBClusterSnapshotIdentifier,
+          !Ref "AWS::NoValue",
+          !Ref RootPassword,
+        ]
+      DBSubnetGroupName: !Ref SubnetGroup
+      VpcSecurityGroupIds: !Split
+        - ","
+        - !Join
+          - ","
+          - !Ref VpcSecurityGroupIds
+      BackupRetentionPeriod: !If [EnvIsProd, 35, 7]
+      StorageEncrypted: true
+      Port: !If
+        - HasServerless
+        - !Ref AWS::NoValue
+        - !FindInMap [EngineMap, !Ref Engine, Port]
+      ScalingConfiguration: !If
+        - HasServerless
+        - AutoPause: !Ref ScalingConfigurationAutoPause
+          MinCapacity: !Ref ScalingConfigurationMinCapacity
+          MaxCapacity: !Ref ScalingConfigurationMaxCapacity
+          SecondsUntilAutoPause: !If
+            - HasServerlessPauseTimeout
+            - !Ref ScalingConfigurationSecondsUntilAutoPause
+            - !Ref AWS::NoValue
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+
+  Primary:
+    Type: AWS::RDS::DBInstance
+    Condition: HasPrimary
+    DeletionPolicy: Retain
+    Properties:
+      DBClusterIdentifier: !Ref Cluster
+      DBInstanceIdentifier: !If
+        - HasSubEnvironment
+        - !Sub ${EnvironmentName}-${SubEnvironmentName}-${ClusterName}-primary
+        - !Sub ${EnvironmentName}-${ClusterName}-primary
+      Engine: !FindInMap [EngineMap, !Ref Engine, Engine]
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref InstanceParameterGroup
+      DBSubnetGroupName: !Ref SubnetGroup
+      AutoMinorVersionUpgrade: true
+      PubliclyAccessible: true
+      EnablePerformanceInsights: !Ref EnablePerformanceInsights
+      PerformanceInsightsRetentionPeriod: !If
+        - HasPerformanceInsightsEnabled
+        - !Ref PerformanceInsightsRetentionPeriod
+        - !Ref AWS::NoValue
+      MonitoringInterval: !Ref MonitoringIntervalInSeconds
+      MonitoringRoleArn: !If
+        - HasEnhancedMonitoring
+        - !GetAtt EnhancedMonitoringRole.Arn
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+        - Key: Role
+          Value: primary
+
+  PrimaryMysqlInstanceMonitor:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasPrimary
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/instance-monitor.yml
+      Parameters:
+        Instance: !Ref Primary
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        AlarmTarget: !Ref AlarmTarget
+
+  Replica:
+    Type: AWS::RDS::DBInstance
+    Condition: HasReplica
+    DeletionPolicy: Retain
+    DependsOn:
+      - Primary
+    Properties:
+      DBClusterIdentifier: !Ref Cluster
+      DBInstanceIdentifier: !If
+        - HasSubEnvironment
+        - !Sub ${EnvironmentName}-${SubEnvironmentName}-${ClusterName}-replica
+        - !Sub ${EnvironmentName}-${ClusterName}-replica
+      Engine: !FindInMap [EngineMap, !Ref Engine, Engine]
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref InstanceParameterGroup
+      DBSubnetGroupName: !Ref SubnetGroup
+      AutoMinorVersionUpgrade: true
+      PubliclyAccessible: true
+      EnablePerformanceInsights: !Ref EnablePerformanceInsights
+      PerformanceInsightsRetentionPeriod: !If
+        - HasPerformanceInsightsEnabled
+        - !Ref PerformanceInsightsRetentionPeriod
+        - !Ref AWS::NoValue
+      MonitoringInterval: !Ref MonitoringIntervalInSeconds
+      MonitoringRoleArn: !If
+        - HasEnhancedMonitoring
+        - !GetAtt EnhancedMonitoringRole.Arn
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+        - Key: Role
+          Value: replica
+
+  ReplicaMysqlInstanceMonitor:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasReplica
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/instance-monitor.yml
+      Parameters:
+        Instance: !Ref Replica
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        AlarmTarget: !Ref AlarmTarget
+
+  InstanceParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub Parameter group for the instances in the ${Namespace}-${ClusterName} Aurora cluster.
+      Family: !FindInMap [EngineMap, !Ref Engine, ParameterGroupFamily]
+      Parameters: !If
+        - HasEngineMySQL
+        - performance_schema: !If [IsAurora2x, !Ref "AWS::NoValue", "1"]
+          general_log: "1"
+          slow_query_log: "1"
+          log_bin_trust_function_creators: "1"
+        - ssl: !If [HasEnginePostgreSQL13, !Ref "AWS::NoValue", "1"]
+          #   AuroraPostgres 13 no longer supports ^ this parameter
+          shared_preload_libraries: !If [HasDatadogEnhancedMonitoring, "pg_stat_statements", !Ref "AWS::NoValue"]
+          track_activity_query_size: !If [HasDatadogEnhancedMonitoring, "4096", !Ref "AWS::NoValue"]
+          pg_stat_statements.track: !If [HasDatadogEnhancedMonitoring, "ALL", !Ref "AWS::NoValue"]
+          pg_stat_statements.max: !If [HasDatadogEnhancedMonitoring, "10000", !Ref "AWS::NoValue"]
+          track_io_timing: !If [HasDatadogEnhancedMonitoring, "1", !Ref "AWS::NoValue"]
+          # make sure have have one worker per core
+          max_worker_processes: !If
+            - HasMaxWorkerProcesses
+            - !Ref MaxWorkerProcesses
+            - !FindInMap [InstanceClasses, !Ref InstanceClass, CpuCount]
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+
+  ClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub Parameter group for the ${Namespace}-${ClusterName} Aurora cluster.
+      Family: !FindInMap [EngineMap, !Ref Engine, ClusterParameterGroupFamily]
+      Parameters: !If
+        - HasEngineMySQL
+        - require_secure_transport: "ON"
+          binlog_format: !If [HasDmsSupportEnabled, "ROW", "OFF"]
+          binlog_checksum: !If [HasDmsSupportEnabled, "NONE", !Ref "AWS::NoValue"]
+        - client_encoding: "UTF8"
+          rds.force_ssl: "1"
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnet group for the ${Namespace}-${ClusterName} Aurora cluster.
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+            - HasSubEnvironment
+            - Key: SubEnvironment
+              Value: !Ref SubEnvironmentName
+            - !Ref AWS::NoValue
+
+  PrimaryCPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasPrimary
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-primary-high-cpu
+      AlarmDescription: !Sub "critical: aurora: ${EnvironmentName}-${ClusterName}-primary instance's CPU is high."
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Primary
+
+  ReplicaCPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasReplica
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-replica-high-cpu
+      AlarmDescription: !Sub "critical: aurora: ${EnvironmentName}-${ClusterName}-replica instance's CPU is high."
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Replica
+
+  ClusterReadIopsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasClusterReadIopsHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-read-iops
+      AlarmDescription: !Sub "${ReadIOPSHighUrgency}: aurora: ${Namespace}-${ClusterName} cluster's read IOPS are high."
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ReadIOPSHighThreshold
+      EvaluationPeriods: !Ref ReadIOPSHighEvaluationPeriods
+      ActionsEnabled: true
+      Metrics:
+        - Id: e1
+          Label: readIoPerSecond
+          Expression: m1/500
+          ReturnData: true
+        - Id: m1
+          Label: readIoPerFiveMinutes
+          MetricStat:
+            Metric:
+              MetricName: VolumeReadIOPs
+              Namespace: AWS/RDS
+              Dimensions:
+                - Name: DBClusterIdentifier
+                  Value: !Ref Cluster
+            Period: !Ref ReadIOPSHighPeriod
+            Stat: Average
+          ReturnData: false
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+
+  ClusterWriteIopsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasClusterWriteIopsHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-write-iops
+      AlarmDescription: !Sub "${WriteIOPSHighUrgency}: aurora: ${Namespace}-${ClusterName} cluster's write IOPS are high."
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref WriteIOPSHighThreshold
+      EvaluationPeriods: !Ref WriteIOPSHighEvaluationPeriods
+      ActionsEnabled: true
+      Metrics:
+        - Id: e1
+          Label: writeIoPerSecond
+          Expression: m1/500
+          ReturnData: true
+        - Id: m1
+          Label: writeIoPerFiveMinutes
+          MetricStat:
+            Metric:
+              MetricName: VolumeWriteIOPs
+              Namespace: AWS/RDS
+              Dimensions:
+                - Name: DBClusterIdentifier
+                  Value: !Ref Cluster
+            Period: !Ref WriteIOPSHighPeriod
+            Stat: Average
+          ReturnData: false
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+
+  ClusterSelectLatencyHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-select-latency
+      AlarmDescription: !Sub "critical: aurora: ${EnvironmentName}-${ClusterName} cluster's select latency is high."
+      Namespace: AWS/RDS
+      MetricName: SelectLatency
+      Unit: Milliseconds
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref SelectLatencyHighThreshold
+      Period: !Ref SelectLatencyHighPeriod
+      EvaluationPeriods: !Ref SelectLatencyHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref Cluster
+
+  ClusterDMLLatencyHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-dml-latency
+      AlarmDescription: !Sub "critical: aurora: ${EnvironmentName}-${ClusterName} cluster's DML latency is high."
+      Namespace: AWS/RDS
+      MetricName: DMLLatency
+      Unit: Milliseconds
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref DMLLatencyHighThreshold
+      Period: !Ref DMLLatencyHighPeriod
+      EvaluationPeriods: !Ref DMLLatencyHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref Cluster
+
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Condition: HasEnhancedMonitoring
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole"
+
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Condition: HasServiceDiscovery
+    Properties:
+      DnsConfig:
+        DnsRecords:
+          - Type: CNAME
+            TTL: "60"
+        RoutingPolicy: WEIGHTED
+      Name: !If
+      - HasSubEnvironment
+      - !Sub ${ClusterName}.rds.${SubEnvironmentName}
+      - !Sub ${ClusterName}.rds
+      NamespaceId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:service-discovery:private-dns-namespace:id
+
+  ServiceDiscoveryInstance:
+    Type: AWS::ServiceDiscovery::Instance
+    Condition: HasServiceDiscovery
+    Properties:
+      InstanceAttributes:
+        AWS_INSTANCE_CNAME: !GetAtt Cluster.Endpoint.Address
+      InstanceId: !Sub ${Namespace}-${ClusterName}
+      ServiceId: !Ref ServiceDiscoveryService
+
+  HostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/rds/${ClusterName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Cluster.Endpoint.Address
+
+  PortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/rds/${ClusterName}/port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Cluster.Endpoint.Port
+
+  PrimaryInstanceSSM:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasPrimary
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/datadog-enhanced-monitoring-ssm.yml
+      Parameters:
+        Namespace: !Sub ${Namespace}
+        ClusterName:  !Sub ${ClusterName}
+        Host: !GetAtt Primary.Endpoint.Address
+        Port: !GetAtt Primary.Endpoint.Port
+        Role: primary
+
+  ReplicaInstanceSSM:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasReplica
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/db/addons/datadog-enhanced-monitoring-ssm.yml
+      Parameters:
+        Namespace: !Sub ${Namespace}
+        ClusterName:  !Sub ${ClusterName}
+        Host: !GetAtt Replica.Endpoint.Address
+        Port: !GetAtt Replica.Endpoint.Port
+        Role: replica
+Outputs:
+  Host:
+    Description: The Aurora cluster host.
+    Value: !GetAtt Cluster.Endpoint.Address
+
+  Port:
+    Description: The Aurora cluster port.
+    Value: !GetAtt Cluster.Endpoint.Port
+
+# vim: set ft=yaml.cloudformation :

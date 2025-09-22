@@ -1,0 +1,150 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Simplified Aurora cluster for development
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical that owns the Aurora cluster
+    Type: String
+    Default: ltk
+
+  ClusterName:
+    Description: The name of the Aurora cluster
+    Type: String
+
+  DatabaseName:
+    Description: The name of the database on the Aurora cluster
+    Type: String
+
+  InstanceClass:
+    Description: The Aurora instance class
+    Type: String
+    Default: db.t3.medium
+
+  Engine:
+    Description: The type of Aurora DB to use
+    Type: String
+    AllowedValues:
+      [
+        aurora,
+        aurora-mysql,
+        aurora-postgresql,
+      ]
+    Default: aurora-postgresql
+
+  RootPassword:
+    Description: The root user's password
+    Type: String
+    NoEcho: true
+
+  StorageEncrypted:
+    Description: Whether or not the storage should be encrypted
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+Mappings:
+  EngineMap:
+    aurora:
+      ParameterGroupFamily: aurora5.6
+      ClusterParameterGroupFamily: aurora5.6
+      Port: 3306
+    aurora-mysql:
+      ParameterGroupFamily: aurora-mysql5.7
+      ClusterParameterGroupFamily: aurora-mysql5.7
+      Port: 3306
+    aurora-postgresql:
+      ParameterGroupFamily: aurora-postgresql13
+      ClusterParameterGroupFamily: aurora-postgresql13
+      Port: 5432
+
+Resources:
+  Cluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Delete
+    Properties:
+      DBClusterIdentifier: !Sub ${EnvironmentName}-${VerticalName}-${ClusterName}
+      Engine: !Ref Engine
+      MasterUsername: root
+      MasterUserPassword: !Ref RootPassword
+      DatabaseName: !Ref DatabaseName
+      Port: !FindInMap [EngineMap, !Ref Engine, Port]
+      DBSubnetGroupName: !Ref SubnetGroup
+      DBClusterParameterGroupName: !Ref ClusterParameterGroup
+      VpcSecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+      StorageEncrypted: !Ref StorageEncrypted
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  Primary:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-${VerticalName}-${ClusterName}-primary
+      DBClusterIdentifier: !Ref Cluster
+      DBInstanceClass: !Ref InstanceClass
+      DBParameterGroupName: !Ref InstanceParameterGroup
+      Engine: !Ref Engine
+      PubliclyAccessible: false
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  InstanceParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub Parameter group for the instances in the ${EnvironmentName}-${VerticalName}-${ClusterName} Aurora cluster.
+      Family: !FindInMap [EngineMap, !Ref Engine, ParameterGroupFamily]
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  ClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub Parameter group for the ${EnvironmentName}-${VerticalName}-${ClusterName} Aurora cluster.
+      Family: !FindInMap [EngineMap, !Ref Engine, ClusterParameterGroupFamily]
+      Parameters:
+        client_encoding: UTF8
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  SubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnet group for the ${EnvironmentName}-${VerticalName}-${ClusterName} Aurora cluster.
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+Outputs:
+  Host:
+    Description: The Aurora cluster host
+    Value: !GetAtt Cluster.Endpoint.Address
+
+  Port:
+    Description: The Aurora cluster port
+    Value: !GetAtt Cluster.Endpoint.Port
+
+  ClusterArn:
+    Description: The Aurora cluster ARN
+    Value: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:cluster:${Cluster}

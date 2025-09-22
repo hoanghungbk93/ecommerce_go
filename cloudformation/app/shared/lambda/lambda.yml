@@ -1,0 +1,478 @@
+Description: Creates a lambda function with its own IAM role and CloudWatch alarms.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: The name of the vertical that owns the lambda function (should be all lower cased).
+    Type: String
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  FunctionName:
+    Description: The name of the lambda function.
+    Type: String
+
+  Description:
+    Description: A description of the work performed by the lambda function.
+    Type: String
+
+  Runtime:
+    Description: The runtime of the lambda function.
+    Type: String
+
+  Timeout:
+    Description: The number of seconds the lambda function is allowed to run.
+    Type: Number
+
+  MemorySize:
+    Description: The number of MB the lambda function is allowed to consume.
+    Type: Number
+
+  Handler:
+    Description: The name of the function that Lambda calls to start running your code.
+    Type: String
+
+  CodeBucket:
+    Description: The s3 bucket containing the code artifact.
+    Type: String
+    Default: ltk-lambda-artifacts.liketoknow.it
+
+  CodeKey:
+    Description: The key name of the code artifact in the s3 bucket.
+    Type: String
+
+  ReservedConcurrentExecutions:
+    Description: The maximum number of concurrent executions allowed for the lambda function.
+    Type: Number
+    Default: 0
+    MinValue: 0
+
+  TracingMode:
+    Description: >
+      The lambda function's tracing mode.
+      It is recommended to set this to PassThrough if using the (preferred) Datadog Lambda Extension.
+    Type: String
+    AllowedValues: [PassThrough, Active]
+    Default: PassThrough
+
+  EnableVpcAccess:
+    Description: Specify whether or not the lambda should have access to resources within the VPC.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  CreateDeadLetterQueue:
+    Description: Specify whether or not the lambda should have its own dead letter queue.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  Role:
+    Description: >
+      The name of a pre-existing IAM role for the lambda to assume. If not specified,
+      a role will be created. SSM and KMS access will be added to either.
+    Type: String
+    Default: ""
+
+  ErrorAlarmThreshold:
+    Description: The value against which the error metric is compared.
+    Type: Number
+
+  ErrorAlarmPeriod:
+    Description: The time over which the error alarm metric is applied (seconds).
+    Type: Number
+    Default: 300
+
+  ErrorAlarmEvaluationPeriods:
+    Description: The number of periods over which the data is compared to the threshold.
+    Type: Number
+    Default: 1
+
+  DatadogLoggingEnabled:
+    Description: >
+      Specify whether or not to send logs to Datadog via the CloudWatch exporter.
+      This should be false if using the (preferred) Datadog Lambda Extension.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  DatadogExcludeStartAndEndLogging:
+    Description: >
+      Specify whether or not to exclude start and end logs to Datadog via the CloudWatch exporter.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  DatadogExtensionEnabled:
+    Description: >
+      Specify whether or not to enable the Datadog Lambda Extension.
+      This installs a shared Lambda layer which directly ships metrics, traces,
+      and logs to Datadog without any additional infrastructure.
+      Note: This feature requires the "provided.al2" runtime.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  DatadogExtensionLayerVersion:
+    Type: String
+    Default: "31"
+
+  DatadogServiceName:
+    Description: >
+      Specify a particular service name to use.  If nothing is specified, then the
+      FunctionName will be used.
+      This is useful if you have a project that contains multiple lambda functions, and
+      you would like them to all be under the same service umbrella.
+      Each Function will still be considered its own Resource by default still.
+    Type: String
+    Default: ""
+
+  DatadogAPIKey:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /global/datadog/api-key
+
+  DatadogExcludeStartAndEndLoggingConfig:
+    Type: String
+    Default: '[{"type": "exclude_at_match", "name": "exclude_start_and_end_logs", "pattern": "(START|END) RequestId"}]'
+
+  GitSha:
+    Description: |
+      MAGIC PARAMETER in the parent CF template. magic is granted by ltk-ops directly handling
+      CF template.  In order to get version information on your lambda, set this variable as
+      `GitSha: !Ref GitSha`
+    Type: String
+    Default: ""
+
+  EphemeralStorage:
+    Description: The size of the function's /tmp directory in MB.
+    ConstraintDescription: Allowed values are between 512 and 10240.
+    MaxValue: 10240
+    MinValue: 512
+    Type: Number
+    Default: 512
+
+  EphemeralStorageEnabled:
+    Description: Enables ephemeral storage.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  LambdaEnvironments:
+    Type: String
+    Default: "{}"
+
+Conditions:
+  # Access to the VPC should be specified only when necessary as each
+  # concurrent invocation of the function eats up an IP address in the VPC.
+
+  HasDefaultRole: !Equals [!Ref Role, ""]
+  HasVpcAccess: !Equals [!Ref EnableVpcAccess, true]
+  HasDeadLetterQueue: !Equals [!Ref CreateDeadLetterQueue, true]
+  TracingModeActive: !Equals [!Ref TracingMode, Active]
+  HasReservedConcurrentExecutions:
+    !Not [!Equals [!Ref ReservedConcurrentExecutions, 0]]
+  HasSubEnvironmentName: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+  HasDatadogLoggingEnabled: !Equals [!Ref DatadogLoggingEnabled, true]
+  HasDatadogExcludeStartAndEndLogs: !Equals [!Ref DatadogExcludeStartAndEndLogging, true]
+  HasDatadogExtensionEnabled: !Equals [!Ref DatadogExtensionEnabled, true]
+  HasGitSha: !Not [!Equals [!Ref GitSha, ""]]
+  HasDatadogMergeXrayTraces: !And
+    - !Equals [!Ref TracingMode, Active]
+    - !Equals [!Ref DatadogExtensionEnabled, true]
+  HasEphemeralStorage: !Equals [!Ref EphemeralStorageEnabled, true]
+  HasDatadogServiceName: !Not [!Equals [!Ref DatadogServiceName, ""]]
+
+Resources:
+  #
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - SSMAccessPolicy
+      - KMSAccessPolicy
+    Properties:
+      FunctionName: !Sub ${Namespace}-${FunctionName}
+      Description: !Ref Description
+      Role: !If
+        - HasDefaultRole
+        - !GetAtt DefaultRole.Arn
+        - !Sub arn:aws:iam::${AWS::AccountId}:role/${Role}
+      Timeout: !Ref Timeout
+      MemorySize: !Ref MemorySize
+      EphemeralStorage: !If
+        - HasEphemeralStorage
+        - Size: !Ref EphemeralStorage
+        - !Ref AWS::NoValue
+      Runtime: !Ref Runtime
+      Handler: !Ref Handler
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          ENV: !Ref Namespace # !IMPORTANT!
+          LIST: !Ref LambdaEnvironments
+          DD_ENV: !If # For datadog versioning
+            - HasDatadogExtensionEnabled
+            - !Ref Namespace
+            - !Ref AWS::NoValue
+          DD_API_KEY: !If
+            - HasDatadogExtensionEnabled
+            - !Ref DatadogAPIKey
+            - !Ref AWS::NoValue
+          DD_TRACE_ENABLED: !If
+            - HasDatadogExtensionEnabled
+            - true
+            - !Ref AWS::NoValue
+          DD_SERVICE: !If
+            - HasDatadogExtensionEnabled
+            - !If
+              - HasDatadogServiceName
+              - !Ref DatadogServiceName
+              - !Ref FunctionName
+            - !Ref AWS::NoValue
+          DD_VERSION: !If
+            - HasGitSha
+            - !Ref GitSha
+            - !Ref AWS::NoValue
+          DD_MERGE_XRAY_TRACES: !If
+            - HasDatadogMergeXrayTraces
+            - true
+            - !Ref AWS::NoValue
+          DD_LOGS_CONFIG_PROCESSING_RULES: !If
+            - HasDatadogExtensionEnabled
+            - !If
+              - HasDatadogExcludeStartAndEndLogs
+              - !Ref DatadogExcludeStartAndEndLoggingConfig
+              - !Ref AWS::NoValue
+            - !Ref AWS::NoValue
+      DeadLetterConfig: !If
+        - HasDeadLetterQueue
+        - TargetArn: !GetAtt DeadLetterQueue.Arn
+        - !Ref AWS::NoValue
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrentExecutions
+        - !Ref ReservedConcurrentExecutions
+        - !Ref AWS::NoValue
+      TracingConfig:
+        Mode: !Ref TracingMode
+      Layers:
+        - !If
+          - HasDatadogExtensionEnabled
+          - !Sub arn:aws:lambda:${AWS::Region}:464622532012:layer:Datadog-Extension:${DatadogExtensionLayerVersion}
+          - !Ref AWS::NoValue
+      VpcConfig: !If
+        - HasVpcAccess
+        - SubnetIds: !Split
+            - ","
+            - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+          SecurityGroupIds:
+            - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironmentName
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+        - !If
+          - HasDeadLetterQueue
+          - Key: DLQPolicyName
+            Value: !Ref DeadLetterQueueAccessPolicy
+          - !Ref AWS::NoValue
+
+  # You can't change the name of the log group for a lambda,
+  # but creating it now allows us to set the retention period
+  # instead of the default where it never expires.
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join
+        - ""
+        - - "/aws/lambda/"
+          - !Ref LambdaFunction
+      RetentionInDays: 30
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Condition: HasDeadLetterQueue
+    Properties:
+      QueueName: !Sub ${Namespace}-${FunctionName}-dlq
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: QueueType
+          Value: dlq
+
+  DeadLetterQueueAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasDeadLetterQueue
+    Properties:
+      PolicyName: dlq-access
+      PolicyDocument:
+        Statement:
+          - Action: sqs:SendMessage
+            Effect: Allow
+            Resource: !GetAtt DeadLetterQueue.Arn
+      Roles:
+        - !If [HasDefaultRole, !Ref DefaultRole, !Ref Role]
+
+  SSMAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ssm-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+      Roles:
+        - !If [HasDefaultRole, !Ref DefaultRole, !Ref Role]
+
+  KMSAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !If [HasDefaultRole, !Ref DefaultRole, !Ref Role]
+
+  DefaultRole:
+    Type: AWS::IAM::Role
+    Condition: HasDefaultRole
+    Properties:
+      RoleName: !Sub ${Namespace}-${FunctionName}-lambda-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - !If
+          - HasVpcAccess
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+          - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !If
+          - TracingModeActive
+          - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+          - !Ref AWS::NoValue
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${FunctionName}-errors
+      AlarmDescription: !Sub "low: lambda: ${Namespace}-${FunctionName} has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ErrorAlarmThreshold
+      Period: !Ref ErrorAlarmPeriod
+      EvaluationPeriods: !Ref ErrorAlarmEvaluationPeriods
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref LambdaFunction
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-low-urgency-alerts
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-low-urgency-alerts
+
+  DeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasDeadLetterQueue
+    Properties:
+      AlarmName: !Sub ${Namespace}-${FunctionName}-dlq
+      AlarmDescription: !Sub "critical: sqs: ${Namespace}-${FunctionName} lambda's dead letter queue has messages."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt DeadLetterQueue.QueueName
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-critical-urgency-alerts
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-critical-urgency-alerts
+
+  LogsSubscriptionFilterExportToDatadog:
+    Type: AWS::Logs::SubscriptionFilter
+    Condition: HasDatadogLoggingEnabled
+    Properties:
+      DestinationArn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:v2-dd-exporter-lambda
+      FilterPattern: ""
+      LogGroupName: !Ref LogGroup
+
+Outputs:
+  FunctionName:
+    Description: The name of the lambda function.
+    Value: !Ref LambdaFunction
+
+  FunctionArn:
+    Description: The ARN of the lambda function.
+    Value: !GetAtt LambdaFunction.Arn
+
+  DeadLetterQueueUrl:
+    Description: The ARN of the lambda dead letter queue
+    Condition: HasDeadLetterQueue
+    Value: !Ref DeadLetterQueue
+
+  DeadLetterQueueArn:
+    Description: The ARN of the lambda dead letter queue
+    Condition: HasDeadLetterQueue
+    Value: !GetAtt DeadLetterQueue.Arn

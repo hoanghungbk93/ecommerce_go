@@ -1,0 +1,479 @@
+Description: Creates an ECS cluster specifically configured for services that must scale as load increases.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the cluster. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ClusterName:
+    Description: The name of the ECS cluster.
+    Type: String
+
+  InstanceType:
+    Description: The type of the EC2 instances used to build the cluster.
+    Type: String
+    Default: t2.micro
+
+  MinSize:
+    Description: The minimum number of EC2 instances allowed in the cluster.
+    Type: Number
+    MinValue: 0
+    Default: 1
+
+  MaxSize:
+    Description: The maximum number of EC2 instances allowed in the cluster.
+    Type: Number
+    Default: 4
+
+  MinInstancesInService:
+    Description: The minimum allowed instances in a rolling update.
+    Type: Number
+    Default: 1
+
+  DesiredCapacity:
+    Description: >
+      The desired number of instances in the cluster. Set to -1
+      to leave the number of instances in the cluster unchanged.
+    Type: Number
+    MinValue: -1
+    Default: -1
+
+  ScaleUpThreshold:
+    Description: The max CPU threshold that triggers a scale up event (percentage).
+    Type: Number
+    Default: 60
+
+  ScaleDownThreshold:
+    Description: The max CPU threshold that triggers a scale down event (percentage).
+    Type: Number
+    Default: 30
+
+  ScaleUpAdjustment:
+    Description: >-
+      The amount of EC2 instances you want to scale up each time the scale up alarm is triggered.
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  ScaleDownAdjustment:
+    Description: >-
+      The amount of EC2 instances you want to scale down each time the scale down alarm is triggered.
+    Type: Number
+    Default: -1
+    MaxValue: -1
+
+  ECSAMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id
+
+  CapacityTooHighStatistic:
+    Type: String
+    Default: Average
+    AllowedValues: [Maximum, Average, Minimum]
+
+  CapacityTooHighThreshold:
+    Description: |
+      Represents the upper threshold for task count for the target statistic before an alarm triggers.
+      0 = alarm is disabled
+      -1 = default to value of MaxSize
+    Type: Number
+    Default: -1
+
+  CapacityTooHighUrgency:
+    Description: |
+      Determines if the alarm fired by this cloudwatch metric is low or high.
+      A high urgency wakes people up.
+    Type: String
+    Default: critical
+    AllowedValues: [low, critical]
+
+  CapacityTooHighPeriod:
+    Description: The number of seconds over which the target task capacity statistic is sampled. Must be a multiple of 60.
+    Type: Number
+    Default: 60
+
+  CapacityTooHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified statistic for the service's task count.
+    Type: Number
+    Default: 5
+
+  VPCZoneIdentifier:
+    Description: >
+      A comma delimited list of private VPC subnets to use in autoscaling groups.
+      Only specify when an InstanceType is not available in every subnet within the VPC.
+    Type: CommaDelimitedList
+    Default: ""
+
+  SubnetType:
+    Description: >
+      Determines if the instances launch into public or private subnets.
+      Public Subnets associate a public IP to the ec2 instances by default.
+    Type: String
+    Default: "private"
+    AllowedValues: ["private", "public"]
+
+  SecurityGroups:
+    Description: The Security Groups for the Launch Configuration
+    Type: CommaDelimitedList
+    Default: ""
+
+Conditions:
+  HasDesiredCapacity: !Not [!Equals [!Ref DesiredCapacity, -1]]
+  IsSingleInstanceMode: !And
+    - !Equals [!Ref MinSize, 1]
+    - !Equals [!Ref MaxSize, 1]
+  HasCapacityTooHighAlarm: !And
+    - !Not [!Equals [!Ref CapacityTooHighThreshold, 0]]
+    - !Not [!Condition IsSingleInstanceMode]
+  HasCapacityTooHighThresholdOfMax: !Equals [!Ref CapacityTooHighThreshold, -1]
+  HasVPCZoneIdentifier: !Not [!Equals [!Join [",", !Ref VPCZoneIdentifier], ""]]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+  HasSecurityGroups: !Not [!Equals [!Join ["", !Ref SecurityGroups], ""]]
+
+Mappings:
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Resources:
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${Namespace}-${ClusterName}
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - TempLifecycleHookCreate
+    Properties:
+      VPCZoneIdentifier: !If
+        - HasVPCZoneIdentifier
+        - !Ref VPCZoneIdentifier
+        - !Split
+          - ","
+          - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:${SubnetType}-subnets
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !If
+        - HasDesiredCapacity
+        - !Ref DesiredCapacity
+        - !Ref AWS::NoValue
+      MetricsCollection:
+        - Granularity: 1Minute
+          Metrics:
+            - GroupMinSize
+            - GroupDesiredCapacity
+            - GroupMaxSize
+      Tags:
+        - Key: Name
+          Value: !Ref Cluster
+          PropagateAtLaunch: true
+        - Key: Vertical
+          Value: !Ref VerticalName
+          PropagateAtLaunch: true
+        - Key: Environment
+          Value: !Ref EnvironmentName
+          PropagateAtLaunch: true
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+            PropagateAtLaunch: true
+          - !Ref AWS::NoValue
+        - Key: IS_ECS_HOST
+          Value: True
+          PropagateAtLaunch: true
+        - Key: ClusterScheme
+          Value: ecs
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: !Ref MinInstancesInService
+        MaxBatchSize: 1
+        PauseTime: PT15M
+        WaitOnResourceSignals: true
+
+  LaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn:
+      - TempLifecycleHookCreate
+    Properties:
+      ImageId: !Ref ECSAMI
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+        !If
+        - HasSecurityGroups
+        - !Ref SecurityGroups
+        - - 'Fn::ImportValue': !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+
+      IamInstanceProfile: !Ref InstanceProfile
+      KeyName: !Sub ${VerticalName}-team
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          echo "Installing aws-cfn-bootstrap ..."
+          until yum install -y aws-cfn-bootstrap; do
+            sleep 10
+          done
+          echo "Installed aws-cfn-bootstrap"
+          /opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource LaunchConfiguration
+          /opt/aws/bin/cfn-signal -e $? --region ${AWS::Region} --stack ${AWS::StackName} --resource AutoScalingGroup
+
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          commands:
+            01_add_instance_to_cluster:
+              command: !Sub |
+                cat >> /etc/ecs/ecs.config << EOM
+                ECS_CLUSTER=${Cluster}
+                ECS_ENABLE_CONTAINER_METADATA=true
+                EOM
+            02_change_ulimit:
+              command: |
+                echo OPTIONS="--default-ulimit nofile=1024000:1024000" \
+                  >> /etc/sysconfig/docker
+
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              mode: 000400
+              owner: root
+              group: root
+              content: !Sub |
+                [main]
+                stack=${AWS::StackId}
+                region=${AWS::Region}
+
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content: !Sub |
+                [cfn-auto-reloader-hook]
+                triggers=post.update
+                path=Resources.ContainerInstances.Metadata.AWS::CloudFormation::Init
+                action=/opt/aws/bin/cfn-init -v --region ${AWS::Region} --stack ${AWS::StackName} --resource LaunchConfiguration
+
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: true
+                ensureRunning: true
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+
+  ClusterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Cluster}-ecs-cluster-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ClusterRole
+
+  # Because scaling ECS services is much faster than scaling an ECS cluster,
+  # the ECS cluster scale up alarm must be more responsive than the ECS service
+  # scale up alarm. This ensures that there is always extra cluster capacity
+  # available during scaling events. Conversely, scaling the cluster down
+  # should be more relaxed so that the extra capacity remains available for a
+  # time in case of subsequent spikes.
+
+  ScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 300
+      ScalingAdjustment: !Ref ScaleDownAdjustment
+
+  ScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      Cooldown: 120
+      ScalingAdjustment: !Ref ScaleUpAdjustment
+
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Cluster}-ecs-cluster-high-cpu
+      AlarmDescription: !Sub Scale up the ${Cluster} ECS cluster if max CPU is greater than ${ScaleUpThreshold}% for 1 minute.
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Statistic: Maximum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ScaleUpThreshold
+      Period: 60
+      EvaluationPeriods: 1
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref Cluster
+
+  CPULowAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Cluster}-ecs-cluster-low-cpu
+      AlarmDescription: !Sub Scale down the ${Cluster} ECS cluster if max CPU is less than ${ScaleDownThreshold}% for 20 minutes.
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Statistic: Maximum
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Threshold: !Ref ScaleDownThreshold
+      Period: 60
+      EvaluationPeriods: 20
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref Cluster
+
+  CapacityTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasCapacityTooHighAlarm
+    Properties:
+      AlarmName: !Sub ${Cluster}-ClusterCapacityTooHigh
+      AlarmDescription: !Sub "${CapacityTooHighUrgency}: ecs: ${Cluster} has scaled to the maximum number of instances allowed and cannot scale higher."
+      Namespace: AWS/AutoScaling
+      MetricName: GroupDesiredCapacity
+      Statistic: !Ref CapacityTooHighStatistic
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !If
+        - HasCapacityTooHighThresholdOfMax
+        - !Ref MaxSize
+        - !Ref CapacityTooHighThreshold
+      Period: !Ref CapacityTooHighPeriod
+      EvaluationPeriods: !Ref CapacityTooHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-${CapacityTooHighUrgency}-urgency-alerts-topic-arn
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-${CapacityTooHighUrgency}-urgency-alerts-topic-arn
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+
+  TerminationLifecycleHook:
+    Type: AWS::CloudFormation::Stack
+    DependsOn:
+      - TempLifecycleHookCustomResource
+      - LaunchConfiguration
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/ecs/addons/ec2-termination-lifecycle-hook.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        AutoScalingGroupName: !Ref AutoScalingGroup
+        ClusterName: !Ref Cluster
+
+  TempLifecycleHookCustomResource:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/ecs/addons/temp-ec2-termination-lifecycle-custom-resource.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+
+  TempLifecycleHookCreate:
+    Type: Custom::CreateTempLifecycleHook
+    Properties:
+      ServiceToken: !GetAtt TempLifecycleHookCustomResource.Outputs.LambdaFunctionArn
+      Mode: create
+
+  TempLifecycleHookCleanup:
+    Type: Custom::CleanupTempLifecycleHook
+    DependsOn:
+      - TerminationLifecycleHook
+    Properties:
+      ServiceToken: !GetAtt TempLifecycleHookCustomResource.Outputs.LambdaFunctionArn
+      Mode: cleanup
+
+Outputs:
+  AutoScalingGroupName:
+    Description: The name of the AutoScalingGroup
+    Value: !Ref AutoScalingGroup
+
+  ClusterName:
+    Description: The name of the ECS cluster.
+    Value: !Ref Cluster
+
+  RoleName:
+    Description: The name of the IAM role attached to the ECS cluster.
+    Value: !Ref ClusterRole
+
+  RoleArn:
+    Description: The ARN of the IAM role attached to the ECS cluster.
+    Value: !GetAtt ClusterRole.Arn
+
+  ClusterArn:
+    Description: The ARN of the ECS cluster.
+    Value: !GetAtt Cluster.Arn
+
+  ScaleUpPolicy:
+    Description: >
+      The policy of this service for scaling instances up. To be used with additional custom scaling policies
+    Value: !Ref ScaleUpPolicy
+
+  ScaleDownPolicy:
+    Description: >
+      The policy of this service for scaling instances down. To be used with additional custom scaling policies
+    Value: !Ref ScaleDownPolicy

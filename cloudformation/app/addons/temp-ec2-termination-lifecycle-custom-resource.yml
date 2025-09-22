@@ -1,0 +1,162 @@
+---
+Resources:
+  TempTerminationLifecycleHookLambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - TempTerminationLifecycleHookLambdaFunctionRole
+    Properties:
+      Role: !GetAtt TempTerminationLifecycleHookLambdaFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 300
+      Code:
+        ZipFile: !Sub |
+            # v0.0.2
+            import boto3
+            try:
+                import cfnresponse
+            except ModuleNotFoundError:
+                cfnresponse = type('fakeObj', (object,), {})()
+                cfnresponse.send = lambda a, b, c, x, y: print('fake cfnresponse called')
+                cfnresponse.SUCCESS = 'SUCCESS'
+                cfnresponse.FAILED = 'FAILED'
+
+            c = boto3.client('cloudformation')
+
+
+            def lambda_handler(event, context):
+                print(f'event: {event}')
+                try:
+                    rp = event['ResourceProperties']
+                    mode = rp.get('Mode', 'delete')
+                    print(f'mode:{mode}')
+
+                    physical_resource_id = (event['physical_resource_id']
+                                            if 'physical_resource_id' in event
+                                            else (f'{get_root_stack_name(event["StackId"])}-'
+                                                  f'{event.get("LogicalResourceId")}'))
+
+                    if event['RequestType'].lower() == 'create' and mode == 'create':
+                        t = boto3.client('cloudformation').list_stack_resources(
+                            StackName=event["StackId"],
+                        )
+                        asg_name = lc_name = cluster_name = None
+                        for srs in t['StackResourceSummaries']:
+                            if srs["ResourceType"] == 'AWS::AutoScaling::AutoScalingGroup':
+                                asg_name = srs.get('PhysicalResourceId')
+                            elif srs["ResourceType"] == 'AWS::AutoScaling::LaunchConfiguration':
+                                lc_name = srs.get('PhysicalResourceId')
+                            elif srs["ResourceType"] == 'AWS::ECS::Cluster':
+                                cluster_name = srs.get('PhysicalResourceId')
+                        if all([asg_name, cluster_name, lc_name]):
+                            do_create(event, asg_name, cluster_name)
+                    elif mode == 'cleanup':
+                        do_delete(event)
+                except Exception as err:
+                    cfnresponse.send(event, context, cfnresponse.FAILED,
+                                     {"Error": err.__str__()},
+                                     physical_resource_id)
+                    raise
+                cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                 {},
+                                 physical_resource_id)
+
+
+            def get_root_stack_name(stack_id):
+                return get_root_stack(stack_id).stack_name.split('/')[1]
+
+
+            def get_root_stack(stack_id):
+                stack = boto3.resource('cloudformation').Stack(stack_id)
+                if stack.root_id:
+                    stack = boto3.resource('cloudformation').Stack(stack.root_id)
+                return stack
+
+
+            def tmp_stack_name(stack_id):
+                return f'{get_root_stack_name(stack_id)}-TEMP-TERM-LC'
+
+
+            def do_create(event, asg_name, cluster_name):
+                template_url = ('https://s3.amazonaws.com/cloudformation.adela.it/'
+                                f'templates/shared/'
+                                'ecs/addons/ec2-termination-lifecycle-hook.yml')
+
+                stack_name = tmp_stack_name(event["StackId"])
+                try:
+                    stack = boto3.resource('cloudformation').Stack(stack_name)
+                    stack.stack_id
+                except boto3.client('cloudformation').exceptions.ClientError:
+                    print("CREATE STACK")
+                    c.create_stack(
+                        StackName=stack_name,
+                        TemplateURL=template_url,
+                        Parameters=[
+                            {'ParameterKey': 'AutoScalingGroupName', 'ParameterValue': asg_name},
+                            {'ParameterKey': 'ClusterName', 'ParameterValue': cluster_name},
+                        ],
+                        Tags=boto3.resource('cloudformation').Stack(event["StackId"]).tags,
+                        Capabilities=['CAPABILITY_IAM', 'CAPABILITY_NAMED_IAM'],
+                    )
+                    waiter = c.get_waiter('stack_create_complete')
+                    waiter.wait(StackName=stack_name)
+                else:
+                    print("stack already exists?!")
+
+
+            def do_delete(event):
+                stack_name = tmp_stack_name(event["StackId"])
+                print(f'DELETING TEMP STACK: {stack_name}')
+                c.delete_stack(StackName=stack_name)
+
+  TempTerminationLifecycleHookLambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowCloudFormationAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:ListStackResources
+                  - cloudformation:DescribeStacks
+                  # the following are necessary to completely delete the temp stack
+                  - autoscaling:DescribeLifecycleHooks
+                  - autoscaling:*LifecycleHook
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:*RolePolicy
+                  - lambda:*
+                  - SNS:*
+                Resource: '*'
+        - PolicyName: AllowCloudFormationS3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:Get*
+                  - s3:List*
+                Resource:
+                  - arn:aws:s3:::cloudformation.adela.it/*
+                  - arn:aws:s3:::cloudformation.adela.it
+
+Outputs:
+
+  LambdaFunctionArn:
+    Value: !GetAtt TempTerminationLifecycleHookLambdaFunction.Arn

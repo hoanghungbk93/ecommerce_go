@@ -1,0 +1,33 @@
+Description: >-
+  Adds an SQS trigger to a lambda function. Expects the SQS Queue to exist prior to
+  trigger creation, generally the upstream service that would push to the queue.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SqsQueueArn:
+    Description: The ARN of the SQS Queue that will trigger the lambda function.
+    Type: String
+
+  LambdaFunctionArn:
+    Description: The ARN of the lambda that will be triggered by the SNS topic.
+    Type: String
+
+  BatchSize:
+    Description: The maximum number of items to retrieve in a single batch.
+    Type: Number
+    MinValue: 1
+    MaxValue: 10
+    Default: 10
+
+Resources:
+  EventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: !Ref BatchSize
+      Enabled: true
+      EventSourceArn: !Ref SqsQueueArn
+      FunctionName: !Ref LambdaFunctionArn

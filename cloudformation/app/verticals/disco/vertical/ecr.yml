@@ -1,0 +1,21 @@
+Description: Creates ECR repositories for product discovery.
+
+Resources:
+
+  Leeloo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: product-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from dev AWS accounts.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root
+                - arn:aws:iam::677160192792:root
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability

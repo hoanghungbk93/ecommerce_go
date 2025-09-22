@@ -1,0 +1,765 @@
+Description: Creates a CloudFrontDistribution and s3 buckets necessary to manage static site resources.
+
+# Note: Magic Cloudfront Zone ID = "Z2FDTNDATAQYW2"
+# Ref: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html
+
+Parameters:
+
+  ParentAccountId:
+    Description: >
+      DO NOT OVERRIDE:
+      The aws account id in which the CICD user resides.
+    Type: String
+    Default: '441221892871'
+    AllowedValues: ['', '441221892871']
+
+  IamBuildUser:
+    Description: >
+      DO NOT OVERRIDE:
+      The CICD user name in ParentAccountId used for building and deploying.
+    Type: String
+    Default: 'circle-artificer'
+    AllowedValues: ['', 'circle-artificer']
+
+  # Real Parameters
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  ProjectName:
+    Description: >
+      The project name of the static site. Should be the github repository name.
+      This value is used to create permanent s3 buckets and should NOT change over time.
+    Type: String
+
+  IsDomainRoot:
+    Description: Sets if the static site supports 'www.domain.com' and 'domain.com' aliases.
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  DNSName:
+    Description: >
+      The name of the alias created for the CloudFrontDistribution. If not specified,
+      ${EnvironmentName}-${ProjectName} will be used.
+    Type: String
+    Default: ''
+
+  DNSAliases:
+    Description: >
+      The name of the vanity urls created for the CloudFrontDistribution. If multiple
+      vanity urls are desired, a comma separated list should be provided.
+    Type: String
+    Default: ''
+
+  ExposeS3:
+    Description: >
+      Sets if the static site can be reached directly through S3.
+      Ideally you want to leave this option disabled.
+      If your buckets need to exist in a non ap-southeast-1 region
+      or if your cloudformation command cannot run in ap-southeast-1,
+      ( remember s3 buckets get created in the region in which the cloudformation command runs )
+      then you must enable this option.
+      By exposing s3 we risk additional costs from persons bypassing CDN.
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+
+  EnableS3AccessLogs:
+    Description: Whether or not to log s3 access requests to the site's log bucket. Defaults to 'true'
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+  BucketSuffix:
+    Description: >
+      Leave empty unless you need to work around existing bucket names.
+      Note that this value will have a dash added to the front of it automatically.
+      A value like '20180323' will effectively be a suffix of '-20180323'
+    Type: String
+    Default: ''
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns these resources. The vertical name is required
+      to be lowercase, relatively short, and without spaces.
+    Type: String
+
+  403ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your origin returns the HTTP 403 status code.
+      To disable set to an empty string.
+      Defaults to '/index.html'
+      A custom error page of /index.html is not allowed when using a firewall ( indicated by FirewallBadResponseCodesMaxPerMinute > 0 ) the default aws 403 page will instead be used
+    Type: String
+    Default: /index.html
+
+  403ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 403 status code.
+      Only used when '403ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  403ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the custom 403 error page.
+      Only used when '403ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  404ResponsePagePath:
+    Description: >
+      The path to a custom error page that CloudFront returns to a viewer when your origin returns the HTTP 404 status code.
+      To disable set to an empty string.
+      Defaults to '/index.html'
+    Type: String
+    Default: /index.html
+
+  404ErrorCachingMinTTL:
+    Description: >
+      The minimum amount of time, in seconds, that Amazon CloudFront caches the HTTP 404 status code.
+      Only used when '404ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 300
+    MinValue: 0
+    MaxValue: 2147483647 # max signed long datatype
+
+  404ResponseCode:
+    Description: >
+      The HTTP status code that CloudFront returns to viewer along with the 404 custom error page.
+      Only used when '404ResponsePagePath' is not an empty string.
+    Type: Number
+    Default: 200
+    AllowedValues: [200, 400, 403, 404, 405, 414, 500, 501, 502, 503, 504]
+
+  DomainName:
+    Description: >
+      The domain name to be used for this static site. Also used for SSL.
+    Type: String
+
+  HostedZoneId:
+    Description: >
+      The HostedZoneId to be used for this static site.
+    Type: String
+    Default: ''
+
+  OriginQueryStringEnabled:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+
+
+  FirewallBadResponseCodesMaxPerMinute:
+    Type: Number
+    Description: >
+      The maximum number of bad requests per minute an origin IP can issue before they are considered abusive and blocked.
+      Does nothing if <= 0
+    MinValue: 0
+    Default: 0
+
+  WebACLId:
+    Type: String
+    Description: >
+      Ignored when FirewallBadResponseCodesMaxPerMinute > 0
+    Default: ''
+
+  FirewallBadResponseCodesRegex:
+    Type: String
+    Description: >
+      A python regular expression used to select access responses that indicate abusive behavior.
+      This string is used in python like: re.compile(string).match(example_http_code_str)
+      Unused unless FirewallBadResponseCodesMaxPerMinute > 0
+    Default: "(?:4..)" # 4xx responses indicate a bad client or bad client request
+
+  FirewallBadResponseCodesBlockSeconds:
+    Type: Number
+    Description: >
+      How long an abusive user is blocked.
+    Default: 14400 # 4 hours
+    MinValue: 300 # 5 minutes
+
+  ViewerRequestFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles viewer-request type events.
+      Ignored if empty string.
+    Type: String
+    Default: ''
+
+  OriginRequestFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles origin-request type events.
+      Ignored if empty string.
+    Type: String
+    Default: ''
+
+  ViewerResponseFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles viewer-response type events.
+      Ignored if empty string.
+    Type: String
+    Default: ''
+
+  OriginResponseFunction:
+    Description: >
+      An ARN of a lambda function-version to associate with the static site that handles origin-response type events.
+      Ignored if empty string.
+    Type: String
+    Default: ''
+
+  WhitelistedCookies:
+    Description: >
+      A comma delimted list of cookie names that will be sent to the origin.
+      You should REALLY leave this field empty unless you have a lambda-at-edge function that
+      removes the cookies before they are cached in cloudfront.
+    Type: CommaDelimitedList
+    Default: ''
+
+  CorsAllowedHeaders:
+    Type: CommaDelimitedList
+    Default: 'cache-control,x-requested-with,content-type'
+
+  CorsAllowedOrigins:
+    Type: CommaDelimitedList
+    Default: ''
+
+  CorsAllowedMethods:
+    Type: CommaDelimitedList
+    Default: 'GET'
+
+  CorsExposedHeaders:
+    Type: CommaDelimitedList
+    Default: ''
+
+  CorsMaxAge:
+    Type: Number
+    Default: 0
+    MinValue: 0
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+Mappings:
+  CertArnByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+  # https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_website_region_endpoints
+  # Last Updated: 2018-03-21
+  HostedZoneIds:
+    ap-southeast-1:
+      s3: Z3AQBSTGFYJSTF
+    us-east-2:
+      s3: Z2O1EMRO9K5GLX
+    us-west-1:
+      s3: Z2F56UZL2M1ACD
+    us-west-2:
+      S3: Z3BJ6K6RIION7M
+    ca-central-1:
+      s3: Z1QDHH18159H29
+    ap-south-1:
+      s3: Z11RGJOFQNVJUP
+    ap-northeast-2:
+      s3: Z3W03O7B5YMIYP
+    ap-northeast-3:
+      s3: Z2YQB5RD63NC85
+    ap-southeast-1:
+      s3: Z3O0J2DXBE1FTB
+    ap-southeast-2:
+      s3: Z1WCIGYICN2BYD
+    ap-northeast-1:
+      s3: Z2M4EHUR26P7ZW
+    eu-central-1:
+      s3: Z21DNDUVLTQW6Q
+    eu-west-1:
+      s3: Z1BKCTXD74EZPE
+    eu-west-2:
+      s3: Z3GKZC51ZF0DB4
+    eu-west-3:
+      s3: Z3R1K369G5AVDG
+    sa-east-1:
+      s3: Z7KQH4QJS55SO
+
+  # "Currently, you can specify only certificates that are in the US East (N. Virginia) region."
+  # ( when configuring cloudfront )
+  # Doclink: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cloudfront-distribution-viewercertificate.html#cfn-cloudfront-distribution-viewercertificate-acmcertificatearn
+
+
+Conditions:
+
+  HasDNSName: !Not [!Equals [!Ref DNSName, '']]
+  HasHostedZoneID: !Not [!Equals [!Ref HostedZoneId, '']]
+  HasDNSAliases: !Not [!Equals [ !Ref DNSAliases, '' ]]
+  HasBucketSuffix: !Not [!Equals [!Ref BucketSuffix, '']]
+  HasDomainRootAliases: !Equals [!Ref IsDomainRoot, 'true']
+  HasS3OriginExposed: !Equals [!Ref ExposeS3, 'true']
+  HasS3OriginSecured: !Not [!Equals [!Ref ExposeS3, 'true']]
+  HasParentAccountId: !Not [!Equals [!Ref ParentAccountId, '']]
+  HasIamBuildUser: !And [!Condition HasParentAccountId, !Not [!Equals [!Ref IamBuildUser, '']]]
+  HasEnvironmentProd: !Equals [!Ref EnvironmentName, 'prod']
+  HasS3OriginLogsEnabled: !Equals [!Ref EnableS3AccessLogs, 'true']
+  CreateFirewall: !Not [!Equals [!Ref FirewallBadResponseCodesMaxPerMinute, 0]]
+  Has403ResponsePagePath: !And
+    - !Not [!Equals [!Ref 403ResponsePagePath, '']]
+    - !Or [!Not [!Condition CreateFirewall], !Not [!Equals [!Ref 403ResponsePagePath, '/index.html']]]
+  Has404ResponsePagePath: !Not [!Equals [!Ref 404ResponsePagePath, '']]
+  HasWebACLId: !And [!Not [!Condition CreateFirewall], !Not [!Equals [!Ref WebACLId, '']]]
+  HasViewerRequestFunction: !Not [!Equals [!Ref ViewerRequestFunction, '']]
+  HasOriginRequestFunction: !Not [!Equals [!Ref OriginRequestFunction, '']]
+  HasViewerResponseFunction: !Not [!Equals [!Ref ViewerResponseFunction, '']]
+  HasOriginResponseFunction: !Not [!Equals [!Ref OriginResponseFunction, '']]
+  HasWhitelistedCookies: !Not [!Equals [!Join [',', !Ref WhitelistedCookies], '']]
+  HasCORSConfiguration: !Not [!Equals [!Join [',', !Ref CorsAllowedOrigins], '']]
+  HasCORSMaxAge: !Not [!Equals [!Ref CorsMaxAge, '0']]
+  HasCORSExposedHeaders: !Not [!Equals [!Join [',', !Ref CorsExposedHeaders], '']]
+  HasNoSubEnvironmentName: !Equals [!Ref SubEnvironmentName, ""]
+  HasSubEnvironmentName: !Not [!Condition HasNoSubEnvironmentName]
+  EnableUsaEmbargoWebACL: !Or
+    - !Not [!Condition CreateFirewall]
+    - !Not [!Condition HasWebACLId]
+
+Resources:
+
+  EnvNamespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ''
+        - - !Sub ${EnvNamespace}-${VerticalName}-${ProjectName}-logs
+          - !If [HasBucketSuffix, '-', '']
+          - !Ref BucketSuffix
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRuleCloudfront
+            Status: Enabled
+            ExpirationInDays: '365'
+            Prefix: cloudfront/logs/
+            Transitions:
+              - TransitionInDays: '90'
+                StorageClass: Glacier
+          - Id: GlacierRuleS3
+            Status: Enabled
+            ExpirationInDays: '365'
+            Prefix: s3/logs/
+            Transitions:
+              - TransitionInDays: '90'
+                StorageClass: Glacier
+
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - LoggingBucket
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}
+              - !Sub arn:aws:s3:::${LoggingBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - LoggingBucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ''
+        - - !Sub ${EnvNamespace}-${VerticalName}-${ProjectName}-site
+          - !If [HasBucketSuffix, '-', '']
+          - !Ref BucketSuffix
+      LoggingConfiguration: !If
+        - HasS3OriginLogsEnabled
+        - DestinationBucketName: !Ref LoggingBucket
+          LogFilePrefix: s3/logs/
+        - !Ref AWS::NoValue
+      WebsiteConfiguration:
+        IndexDocument: index.html
+      VersioningConfiguration:
+        Status: Enabled
+      CorsConfiguration: !If
+        - HasCORSConfiguration
+        - CorsRules:
+            - AllowedHeaders: !Ref CorsAllowedHeaders
+              AllowedMethods: !Ref CorsAllowedMethods
+              AllowedOrigins: !Ref CorsAllowedOrigins
+              ExposedHeaders: !If
+                - HasCORSExposedHeaders
+                - !Ref CorsExposedHeaders
+                - !Ref AWS::NoValue
+              Id: DefaultCorsRule
+              MaxAge: !If
+                - HasCORSMaxAge
+                - !Ref CorsMaxAge
+                - !Ref AWS::NoValue
+        - !Ref AWS::NoValue
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - SiteBucket
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}
+              - !Sub arn:aws:s3:::${SiteBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - !If
+            - HasParentAccountId
+            - Action:
+                - s3:Get*
+                - s3:List*
+                - s3:PutObject*
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:s3:::${SiteBucket}
+                - !Sub arn:aws:s3:::${SiteBucket}/*
+              Principal:
+                AWS:
+                  - !Sub arn:aws:iam::${ParentAccountId}:root
+                  - !If [HasIamBuildUser, !Sub 'arn:aws:iam::${ParentAccountId}:user/${IamBuildUser}', !Ref 'AWS::NoValue']
+            - !Ref AWS::NoValue
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}/*
+            Principal: !If
+              - HasS3OriginExposed
+              - '*'
+              - CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+          - Action:
+              - s3:ListBucket
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}
+            Principal: !If
+              - HasS3OriginExposed
+              - '*'
+              - CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+
+  ArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Condition: HasNoSubEnvironmentName
+    Properties:
+      BucketName: !Join
+        - ''
+        - - !Sub ${EnvironmentName}-${VerticalName}-${ProjectName}-artifacts
+          - !If [HasBucketSuffix, '-', '']
+          - !Ref BucketSuffix
+      VersioningConfiguration:
+        Status: Enabled
+
+  ArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasNoSubEnvironmentName
+    DependsOn:
+      - ArtifactsBucket
+    Properties:
+      Bucket: !Ref ArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${ArtifactsBucket}
+              - !Sub arn:aws:s3:::${ArtifactsBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - !If
+            - HasParentAccountId
+            - Action:
+                - s3:Get*
+                - s3:List*
+                - s3:PutObject*
+              Effect: Allow
+              Resource:
+                - !Sub arn:aws:s3:::${ArtifactsBucket}
+                - !Sub arn:aws:s3:::${ArtifactsBucket}/*
+              Principal:
+                AWS:
+                  - !Sub arn:aws:iam::${ParentAccountId}:root
+                  - !If [HasIamBuildUser, !Sub 'arn:aws:iam::${ParentAccountId}:user/${IamBuildUser}', !Ref 'AWS::NoValue']
+            - !Ref AWS::NoValue
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Condition: HasS3OriginSecured
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub >-
+          Grants cloudfront access to read ${EnvNamespace}-${VerticalName}-${ProjectName}-site S3 Bucket
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - SiteBucket
+      - SiteBucketPolicy
+      - LoggingBucket
+    Properties:
+      DistributionConfig:
+        WebACLId: !If
+          - CreateFirewall
+          - !GetAtt Firewall.Outputs.WebACLId
+          - !If
+            - HasWebACLId
+            - !Ref WebACLId
+            - !If
+              - EnableUsaEmbargoWebACL
+              - !ImportValue WafV2CloudfrontWebAclUsaEmbargoArn
+              - !Ref 'AWS::NoValue'
+        CustomErrorResponses:
+          - !If
+              - Has403ResponsePagePath
+              - ErrorCode: 403
+                ErrorCachingMinTTL: !Ref 403ErrorCachingMinTTL
+                ResponseCode: !Ref 403ResponseCode
+                ResponsePagePath: !Ref 403ResponsePagePath
+              - !Ref AWS::NoValue
+          - !If
+              - Has404ResponsePagePath
+              - ErrorCode: 404
+                ErrorCachingMinTTL: !Ref 404ErrorCachingMinTTL
+                ResponseCode: !Ref 404ResponseCode
+                ResponsePagePath: !Ref 404ResponsePagePath
+              - !Ref AWS::NoValue
+        Aliases: !Split
+          - ','
+          - !Join
+            - ','
+            - - !If
+                  - HasDomainRootAliases
+                  - !Sub "www.${DomainName},${DomainName}"
+                  - !Ref AWS::NoValue
+              - !Join
+                  - '.'
+                  - - !If
+                      - HasDNSName
+                      - !Ref DNSName
+                      - !Sub '${EnvNamespace}-${ProjectName}'
+                    - !Ref DomainName
+              - !If
+                  - HasDNSAliases
+                  - !Ref DNSAliases
+                  - !Ref AWS::NoValue
+
+        Comment: !Join
+          - ''
+          - - !Sub Public static website ${EnvNamespace}-${ProjectName}
+            - !If [HasDNSName, !Sub ' alias=${DNSName}', '']
+        Logging:
+          Bucket: !GetAtt LoggingBucket.DomainName
+          IncludeCookies: false
+          Prefix: cloudfront/logs/
+        Origins:
+          - DomainName: !If
+              - HasS3OriginExposed
+              - !Select [2, !Split [/, !GetAtt SiteBucket.WebsiteURL]]
+              - !GetAtt SiteBucket.DomainName
+            Id: s3origin
+            CustomOriginConfig: !If
+              - HasS3OriginExposed
+              - OriginProtocolPolicy: http-only
+              - !Ref AWS::NoValue
+            S3OriginConfig: !If
+              - HasS3OriginSecured
+              - OriginAccessIdentity: !Join
+                  - /
+                  - - origin-access-identity/cloudfront
+                    - !Ref CloudFrontOriginAccessIdentity
+              - !Ref AWS::NoValue
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          ForwardedValues:
+            QueryString: !Ref OriginQueryStringEnabled
+            Cookies: !If
+              - HasWhitelistedCookies
+              - Forward: whitelist
+                WhitelistedNames: !Ref WhitelistedCookies
+              - Forward: none
+            Headers: !If
+              - HasCORSConfiguration
+              - - Access-Control-Request-Headers
+                - Access-Control-Request-Method
+                - Origin
+              - !Ref AWS::NoValue
+          TargetOriginId: s3origin
+          ViewerProtocolPolicy: redirect-to-https
+          LambdaFunctionAssociations:
+            - !If
+              - HasViewerRequestFunction
+              - LambdaFunctionARN: !Ref ViewerRequestFunction
+                EventType: viewer-request
+              - !Ref AWS::NoValue
+            - !If
+              - HasOriginRequestFunction
+              - LambdaFunctionARN: !Ref OriginRequestFunction
+                EventType: origin-request
+              - !Ref AWS::NoValue
+            - !If
+              - HasViewerResponseFunction
+              - LambdaFunctionARN: !Ref ViewerResponseFunction
+                EventType: viewer-response
+              - !Ref AWS::NoValue
+            - !If
+              - HasOriginResponseFunction
+              - LambdaFunctionARN: !Ref OriginResponseFunction
+                EventType: origin-response
+              - !Ref AWS::NoValue
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        PriceClass: !If
+          - HasEnvironmentProd
+          - PriceClass_All
+          - PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2018
+
+  PublicCloudFrontRecordSet:
+    Type: AWS::Route53::RecordSet
+    DependsOn:
+      - CloudFrontDistribution
+    Properties:
+      Comment: !Sub >-
+        DNS for external communication to the ${EnvNamespace}-${ProjectName}
+        static CloudFront site.
+      HostedZoneName: !If
+        - HasHostedZoneID
+        - !Ref AWS::NoValue
+        - !Sub ${DomainName}.
+      HostedZoneId: !If
+        - HasHostedZoneID
+        - !Sub ${HostedZoneId}
+        - !Ref AWS::NoValue
+      Name: !Join
+        - ""
+        - - !If
+            - HasDNSName
+            - !Ref DNSName
+            - !Sub '${EnvNamespace}-${ProjectName}'
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  PublicS3OriginRecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: HasS3OriginExposed
+    DependsOn:
+      - SiteBucket
+    Properties:
+      Comment: !Sub >-
+        DNS for external communication to the ${EnvNamespace}-${ProjectName}
+        origin S3 site.
+      HostedZoneName: !Sub ${DomainName}.
+      Name: !Join
+        - ""
+        - - !If
+            - HasDNSName
+            - !Sub '${DNSName}-origin'
+            - !Sub '${EnvNamespace}-${ProjectName}-origin'
+          - .
+          - !Ref DomainName
+          - .
+      Type: CNAME
+      AliasTarget:
+        DNSName: !Select [2, !Split [/, !GetAtt SiteBucket.WebsiteURL]]
+        HostedZoneId: !FindInMap
+          - HostedZoneIds
+          - !Ref AWS::Region
+          - s3
+
+  Firewall:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/firewall/basic.yml
+      Parameters:
+        # shim for subenv: a shim here is safe because this nested stack only
+        # uses EnvironmentName as a resource prefix
+        EnvironmentName: !Ref EnvNamespace
+        ProjectName: !Ref ProjectName
+
+  FirewallTrafficFilter:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/firewall-lambdas/httpcodes.yml
+      Parameters:
+        # unsafe to use shim method here since EnvironmentName is used for an
+        # import
+        EnvironmentName: !Ref EnvironmentName
+        CloudFrontDistributionId: !Ref CloudFrontDistribution
+        # shim lite?
+        FunctionName: !Sub ${EnvNamespace}-${ProjectName}-waf-auto-httpcode
+        ManualBlockIPSet: !GetAtt Firewall.Outputs.ManualBlockIPSet
+        AutoBlockIPSet: !GetAtt Firewall.Outputs.AutoBlockIPSet
+        AccessLogBucket: !Ref LoggingBucket
+        AccessLogKeyPrefix: !Sub cloudfront/
+        BlockSeconds: !Ref FirewallBadResponseCodesBlockSeconds
+        BadResponseCodesRegex: !Ref FirewallBadResponseCodesRegex
+        BadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+
+Outputs:
+  CloudFrontDistributionDomainName:
+    Description: DNS name for the CloudFront distribution
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: The ID of the created cloudfront distribution
+    Value: !Ref CloudFrontDistribution
+
+# vim: set ft=yaml.cloudformation :

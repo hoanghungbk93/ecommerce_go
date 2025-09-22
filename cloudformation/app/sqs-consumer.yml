@@ -1,0 +1,528 @@
+Description: Creates an ECS service specifically configured for workers that consume messages from SQS.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, staging, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the service. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ServiceName:
+    Description: The name of the service.
+    Type: String
+
+  ContainerUrl:
+    Description: The URL of the docker image to deploy into the containers.
+    Type: String
+
+  Cluster:
+    Description: The name of the cluster that the service should run on.
+    Type: String
+
+  MinCapacity:
+    Description: The minimum number of tasks that can be running in the service.
+    Type: Number
+    MinValue: 0
+    Default: 1
+
+  MaxCapacity:
+    Description: The maximum number of tasks that can be running in the service.
+    Type: Number
+    MinValue: 0
+    Default: 1
+
+  DesiredCount:
+    Description: >
+      The desired number of tasks the service should run. Set to
+      -1 to leave the number of tasks in the service unchanged.
+    Type: Number
+    MinValue: -1
+    Default: -1
+
+  CPU:
+    Description: The number of CPU units to reserve for the container.
+    Type: Number
+
+  Memory:
+    Description: >
+      The max number of MiB that each task may consume (hard limit).
+      You must specify one or both of Memory and MemoryReservation.
+    Type: Number
+    Default: -1
+
+  MemoryReservation:
+    Description: >
+      The number of MiB to reserve for each task (soft limit).
+      You must specify one or both of Memory and MemoryReservation.
+    Type: Number
+    Default: -1
+
+  NetworkMode:
+    Description: The networking mode for the task definition.
+    Type: String
+    AllowedValues: [none, bridge, host]
+    Default: bridge
+
+  TaskRole:
+    Description: >
+      The name of a pre-existing IAM role for each task to assume. If not specified,
+      a role will be created. SQS, SSM, and KMS access will be added to either.
+    Type: String
+    Default: ""
+
+  Queue:
+    Description: >
+      The name of the queue that the workers in the cluster will consume. The
+      length of this queue affects the auto scaling of the tasks in the service.
+    Type: String
+
+  ScalingMetric:
+    Description: The SQS metric to monitor for scaling events.
+    Type: String
+    AllowedValues:
+      - ApproximateNumberOfMessagesVisible
+      - ApproximateAgeOfOldestMessage
+    Default: ApproximateNumberOfMessagesVisible
+
+  ScaleUpThreshold:
+    Description: The threshold for scaling up the number of tasks.
+    Type: Number
+    MinValue: 1
+    Default: 1
+
+  ScaleDownThreshold:
+    Description: The threshold for scaling down the number of tasks.
+    Type: Number
+    MinValue: 0
+    Default: 0
+
+  MinimumHealthyPercent:
+    Description: >-
+      The minimum number of tasks, specified as a percentage of the service's
+      desired count, that must continue to run and remain healthy during a deployment.
+    Type: Number
+    Default: 50
+
+  MaximumPercent:
+    Description: >-
+      The maximum number of tasks, specified as a percentage of the
+      service's desired count, that can run in a service during a deployment.
+    Type: Number
+    Default: 200
+
+  CapacityTooHighThreshold:
+    Description: |
+      Represents the upper threshold for task count for the target statisitc before an alarm triggers.
+      0 = alarm is disabled
+      -1 = default to value of MaxCapacity
+    Type: Number
+    Default: -1
+
+  CapacityTooHighUrgency:
+    Description: |
+      Determines if the alarm fired by this cloudwatch metric is low or high.
+      A high urgency wakes people up.
+    Type: String
+    Default: critical
+    AllowedValues: [low, critical]
+
+  CapacityTooHighEvaluationPeriods:
+    Description: The number of minute-long periods over which data is compared to the specified statistic for the service's task count.
+    Type: Number
+    Default: 5
+
+  EnableCloudWatchLogging:
+    Description: >
+      Set to true to ship logs to CloudWatch. Set to false for standard Docker logging.
+      If you provide an external task definition the user provided value is ignored and will be considered false.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  TaskDefinitionArn:
+    Description: >-
+      Rather than making a Task Definition in this template, allow the parent stack to create one and pass it in.
+      This allows easier customization of attributes that are arrays or dictionaries without exploding parameters
+      on this template.
+      If you provide a TaskDefinition make sure you also define a CloudWatchLogGroup in the parent stack.
+    Type: String
+    Default: ""
+
+  TaskCommand:
+    Description: >-
+      An array of literal strings that are separated by commas. The total number of strings should be one
+      more than the total number of commas. Also, each member string is space trimmed.
+      Useful for optionally supplying a custom command to the ContainerDefinition within the TaskDefinition.
+      This is handy in the case of multiple identical containers that simply need to execute different commands
+      at runtime. Authors reserve the option to supply entirely custom TaskDefinitions using the TaskDefinitionArn
+      parameter, but if the only difference required is the command, then this parameter should be used instead.
+    Type: CommaDelimitedList
+    Default: ""
+
+  JsonLogMaxSize:
+    Description: >-
+      Only used when EnableCloudWatchLogging=false
+      The maximum size of the log before it is rolled.
+      A positive integer plus a modifier representing the unit of measure (k, m, or g).
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "10m"
+    AllowedPattern: "\\A[1-9]\\d*[kmg]\\z"
+
+  JsonLogMaxFile:
+    Description: >-
+      Only used when EnableCloudWatchLogging=false
+      The maximum number of log files that can be present.
+      If rolling the logs creates excess files, the oldest file is removed.
+      Only effective when max-size is also set. A positive integer.
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "3"
+    AllowedPattern: "\\A[1-9]\\d*\\z"
+
+  ScaleUpAdjustment:
+    Description: >-
+      The amount of tasks you want to scale up each time the scale up alarm is triggered.
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  ScaleDownAdjustment:
+    Description: >-
+      The amount of tasks you want to scale down each time the scale down alarm is triggered.
+    Type: Number
+    Default: -1
+    MaxValue: -1
+
+Conditions:
+  HasDesiredCount: !Not [!Equals [!Ref DesiredCount, -1]]
+  HasDefaultTaskRole: !Equals [!Ref TaskRole, ""]
+  HasHardMemoryLimit: !Not [!Equals [!Ref Memory, -1]]
+  HasSoftMemoryLimit: !Not [!Equals [!Ref MemoryReservation, -1]]
+  IsSingleServiceMode: !And
+    - !Equals [!Ref MinCapacity, 1]
+    - !Equals [!Ref MaxCapacity, 1]
+  HasCapacityTooHighAlarm: !And
+    - !Not [!Equals [!Ref CapacityTooHighThreshold, 0]]
+    - !Not [!Condition IsSingleServiceMode]
+  HasCapacityTooHighThresholdOfMax: !Equals [!Ref CapacityTooHighThreshold, -1]
+  NoExternalTaskDefinitionArn: !Equals [!Ref TaskDefinitionArn, ""]
+  HasTaskCommand: !Not [!Equals ["", !Join [",", !Ref TaskCommand]]]
+  CloudWatchLogsEnabled: 
+    !And [
+      !Equals [!Ref EnableCloudWatchLogging, true],
+      !Condition NoExternalTaskDefinitionArn,
+    ]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - SQSPolicy
+      - SSMPolicy
+      - KMSPolicy
+    Properties:
+      ServiceName: !Sub ${Namespace}-${ServiceName}
+      Cluster: !Ref Cluster
+      DesiredCount: !If
+        - HasDesiredCount
+        - !Ref DesiredCount
+        - !Ref AWS::NoValue
+      TaskDefinition: !If
+        - NoExternalTaskDefinitionArn
+        - !Ref TaskDefinition
+        - !Ref TaskDefinitionArn
+      DeploymentConfiguration:
+        MinimumHealthyPercent: !Ref MinimumHealthyPercent
+        MaximumPercent: !Ref MaximumPercent
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: NoExternalTaskDefinitionArn
+    Properties:
+      Family: !Sub ${Namespace}-${ServiceName}
+      NetworkMode: !Ref NetworkMode
+      TaskRoleArn: !If
+        - HasDefaultTaskRole
+        - !GetAtt DefaultTaskRole.Arn
+        - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}
+      ContainerDefinitions:
+        - Name: !Sub ${Namespace}-${ServiceName}
+          Cpu: !Ref CPU
+          Memory: !If
+            - HasHardMemoryLimit
+            - !Ref Memory
+            - !Ref AWS::NoValue
+          MemoryReservation: !If
+            - HasSoftMemoryLimit
+            - !Ref MemoryReservation
+            - !Ref AWS::NoValue
+          Essential: true
+          Image: !Ref ContainerUrl
+          LogConfiguration: !If
+            - CloudWatchLogsEnabled
+            - LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref CloudWatchLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: !Ref ServiceName
+            - LogDriver: json-file
+              Options:
+                max-size: !Ref JsonLogMaxSize
+                max-file: !Ref JsonLogMaxFile
+          Ulimits:
+            - Name: nofile
+              HardLimit: 1024000
+              SoftLimit: 1024000
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: ENV
+              Value: !Ref EnvironmentName
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+          Command: !If
+            - HasTaskCommand
+            - !Ref TaskCommand
+            - !Ref AWS::NoValue
+
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CloudWatchLogsEnabled
+    Properties:
+      LogGroupName: !Sub ${Namespace}-${ServiceName}
+      RetentionInDays: 30
+
+  DefaultTaskRole:
+    Type: AWS::IAM::Role
+    Condition: HasDefaultTaskRole
+    Properties:
+      RoleName: !Sub ${Namespace}-${ServiceName}-default-ecs-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+
+  SQSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: sqs-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - sqs:GetQueueUrl
+              - sqs:GetQueueAttributes
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:DeleteMessageBatch
+            Resource:
+              - !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${Queue}
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  SSMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ssm-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  KMSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  AutoScaleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${Namespace}-${ServiceName}-ecs-autoscale-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  ScaleTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+      ResourceId: !Sub service/${Cluster}/${Service.Name}
+      RoleARN: !GetAtt AutoScaleRole.Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ScaleUpPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ScaleUp
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScaleTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: !Ref ScaleUpAdjustment
+
+  ScaleUpAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ServiceName}-ecs-service-scale-up
+      AlarmDescription: !Sub |
+        Add a task to the ${Namespace}-${ServiceName} ECS service when the ${ScalingMetric}
+        metric of the ${Queue} queue is at or exceeds ${ScaleUpThreshold} for 1 minute.
+      Namespace: AWS/SQS
+      MetricName: !Ref ScalingMetric
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ScaleUpThreshold
+      Period: 60
+      EvaluationPeriods: 1
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref Queue
+
+  ScaleDownPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: ScaleDown
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScaleTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: !Ref ScaleDownAdjustment
+
+  ScaleDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ServiceName}-ecs-service-scale-down
+      AlarmDescription: !Sub |
+        Remove a task from the ${Namespace}-${ServiceName} ECS service when the ${ScalingMetric}
+        metric of the ${Queue} queue is at or below ${ScaleDownThreshold} for 10 minutes.
+      Namespace: AWS/SQS
+      MetricName: !Ref ScalingMetric
+      Statistic: Average
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Threshold: !Ref ScaleDownThreshold
+      Period: 300
+      EvaluationPeriods: 2
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref Queue
+
+  CapacityTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasCapacityTooHighAlarm
+    Properties:
+      AlarmName: !Join
+        - ""
+        - - !GetAtt Service.Name
+          - "-ServiceCapacityTooHigh"
+      AlarmDescription: !Join
+        - ""
+        - - !Sub "${CapacityTooHighUrgency}: ecs: "
+          - !GetAtt Service.Name
+          - " has too many tasks and cannot scale higher."
+      Namespace: AWS/ECS
+      MetricName: CPUUtilization
+      Statistic: SampleCount
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !If
+        - HasCapacityTooHighThresholdOfMax
+        - !Ref MaxCapacity
+        - !Ref CapacityTooHighThreshold
+      Period: 60 # must remain 60 seconds or else the "hack" aws recommends fails: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/cloudwatch-metrics.html#cw_running_task_count
+      EvaluationPeriods: !Ref CapacityTooHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-${CapacityTooHighUrgency}-urgency-alerts-topic-arn
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-${CapacityTooHighUrgency}-urgency-alerts-topic-arn
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref Cluster
+        - Name: ServiceName
+          Value: !GetAtt Service.Name
+
+Outputs:
+
+  ServiceName:
+    Description: The name of the service.
+    Value: !GetAtt Service.Name
+
+  ServiceArn:
+    Description: The ARN of the service.
+    Value: !Ref Service

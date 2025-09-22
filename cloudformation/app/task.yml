@@ -1,0 +1,338 @@
+Description: Creates an ECS task definition.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Description: The name of the subenvironment.
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the service. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  TaskName:
+    Description: The name of the task.
+    Type: String
+
+  CPU:
+    Description: |
+      The number of CPU units to reserve for the container.  If you are using
+      the Fargate launch type, this field is required and you must use one of
+      the following values, which determines your range of valid values for the
+      memory parameter:
+        - 256 (.25 vCPU) - Available memory values: 0.5GB, 1GB, 2GB
+        - 512 (.5 vCPU) - 1GB, 2GB, 3GB, 4GB
+        - 1024 (1 vCPU) - 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB
+        - 2048 (2 vCPU) - Between 4GB and 16GB in 1GB increments
+        - 4096 (4 vCPU) - Between 8GB and 30GB in 1GB increments
+    Type: Number
+
+  Memory:
+    Description: The number of MiB of memory to reserve for the container (hard limit).
+    Type: Number
+    Default: -1
+
+  MemoryReservation:
+    Description: The number of MiB of memory to reserve for the container (soft limit).
+    Type: Number
+    Default: -1
+
+  NetworkMode:
+    Description: The networking mode for the task definition.
+    Type: String
+    AllowedValues: [none, bridge, host]
+    Default: bridge
+
+  ContainerUrl:
+    Description: The full url to the container.
+    Type: String
+
+  EntryPoint:
+    Description: >
+      The ENTRYPOINT value to pass to the container.
+      See https://docs.docker.com/engine/reference/builder/#entrypoint.
+    Type: CommaDelimitedList
+    Default: ""
+
+  Command:
+    Description: >
+      The CMD value to pass to the container.
+      See https://docs.docker.com/engine/reference/builder/#cmd.
+    Type: CommaDelimitedList
+    Default: ""
+
+  WorkingDirectory:
+    Description: Working directory for the container to run commands.
+    Type: String
+    Default: ""
+
+  TaskRole:
+    Description: >
+      The name of a pre-existing IAM role for each task to assume. If not specified,
+      a role will be created. SSM and KMS access will be added to either.
+    Type: String
+    Default: ""
+
+  LaunchType:
+    Type: String
+    Description: >
+      The launch type the task requires. If no value is specified, it will
+      default to EC2. Valid values include EC2 and FARGATE.
+    AllowedValues: [EC2, FARGATE]
+    Default: EC2
+
+  EnableCloudWatchLogging:
+    Description: >
+      Set to true to ship logs to CloudWatch. Set to false for standard Docker logging.
+      Note this value cannot be false when using the FARGATE LaunchType - it will be ignored.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  JsonLogMaxSize:
+    Description: >-
+      Only used when EnableCloudWatchLogging=false
+      The maximum size of the log before it is rolled.
+      A positive integer plus a modifier representing the unit of measure (k, m, or g).
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "10m"
+    AllowedPattern: "\\A[1-9]\\d*[kmg]\\z"
+
+  JsonLogMaxFile:
+    Description: >-
+      Only used when EnableCloudWatchLogging=false
+      The maximum number of log files that can be present.
+      If rolling the logs creates excess files, the oldest file is removed.
+      Only effective when max-size is also set. A positive integer.
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "3"
+    AllowedPattern: "\\A[1-9]\\d*\\z"
+
+Conditions:
+
+  HasEntryPoint: !Not [!Equals [!Join ["", !Ref EntryPoint], ""]]
+  HasCommand: !Not [!Equals [!Join ["", !Ref Command], ""]]
+  HasWorkingDirectory: !Not [!Equals [!Ref WorkingDirectory, ""]]
+  HasHardMemoryLimit: !Not [!Equals [!Ref Memory, -1]]
+  HasSoftMemoryLimit: !Not [!Equals [!Ref MemoryReservation, -1]]
+  HasDefaultTaskRole: !Equals [!Ref TaskRole, ""]
+  IsFargateTask: !Equals [!Ref LaunchType, FARGATE]
+  CloudWatchLogsEnabled: !Or
+    - !Equals [!Ref EnableCloudWatchLogging, true]
+    - !Condition IsFargateTask
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${Namespace}-${TaskName}
+      Cpu: !If
+        - IsFargateTask
+        - !Ref CPU
+        - !Ref AWS::NoValue
+      Memory: !If
+        - IsFargateTask
+        - !Ref Memory
+        - !Ref AWS::NoValue
+      NetworkMode: !If
+        - IsFargateTask
+        - awsvpc
+        - !Ref NetworkMode
+      RequiresCompatibilities: !If
+        - IsFargateTask
+        - - FARGATE
+        - !Ref AWS::NoValue
+      ExecutionRoleArn: !If
+        - IsFargateTask
+        - !Ref ECSTaskExecutionRole
+        - !Ref AWS::NoValue
+      TaskRoleArn: !If
+        - HasDefaultTaskRole
+        - !GetAtt DefaultTaskRole.Arn
+        - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}
+      ContainerDefinitions:
+        - Name: !Sub ${Namespace}-${TaskName}
+          EntryPoint: !If
+            - HasEntryPoint
+            - !Ref EntryPoint
+            - !Ref AWS::NoValue
+          Command: !If
+            - HasCommand
+            - !Ref Command
+            - !Ref AWS::NoValue
+          WorkingDirectory: !If
+            - HasWorkingDirectory
+            - !Ref WorkingDirectory
+            - !Ref AWS::NoValue
+          Cpu: !Ref CPU
+          Memory: !If
+            - HasHardMemoryLimit
+            - !Ref Memory
+            - !Ref AWS::NoValue
+          MemoryReservation: !If
+            - HasSoftMemoryLimit
+            - !Ref MemoryReservation
+            - !Ref AWS::NoValue
+          Essential: true
+          Image: !Ref ContainerUrl
+          LogConfiguration: !If
+            - CloudWatchLogsEnabled
+            - LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref CloudWatchLogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: !Ref TaskName
+            - LogDriver: json-file
+              Options:
+                max-size: !Ref JsonLogMaxSize
+                max-file: !Ref JsonLogMaxFile
+          Ulimits:
+            - Name: nofile
+              HardLimit: 1024000
+              SoftLimit: 1024000
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: ENV
+              Value: !Ref Namespace
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: ECS_TASK_NAME
+              Value: !Ref TaskName
+
+  DefaultTaskRole:
+    Type: AWS::IAM::Role
+    Condition: HasDefaultTaskRole
+    Properties:
+      RoleName: !Sub ${Namespace}-${TaskName}-default-ecs-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Condition: IsFargateTask
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - ecs-tasks.amazonaws.com
+              - events.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                # Allow the ECS Tasks to download images from ECR
+                - ecr:GetAuthorizationToken
+                - ecr:BatchCheckLayerAvailability
+                - ecr:GetDownloadUrlForLayer
+                - ecr:BatchGetImage
+              Resource: '*'
+            - !If
+                - CloudWatchLogsEnabled
+                - Effect: Allow
+                  Action:
+                    # Allow the ECS tasks to upload logs to CloudWatch
+                    - logs:CreateLogStream
+                    - logs:PutLogEvents
+                  Resource: !GetAtt CloudWatchLogGroup.Arn
+                - !Ref AWS::NoValue
+        - PolicyName: AmazonEC2ContainerServiceEventsExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Sub >-
+                  arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task-definition/${Namespace}-${TaskName}:*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: '*'
+                Condition:
+                  StringLike:
+                    iam:PassedToService: ecs-tasks.amazonaws.com
+
+  SSMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ssm-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  KMSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: CloudWatchLogsEnabled
+    Properties:
+      LogGroupName: !Sub ${Namespace}-${TaskName}
+      RetentionInDays: 30
+
+Outputs:
+
+  TaskDefinitionArn:
+    Description: The ARN of the task definition.
+    Value: !Ref TaskDefinition
+
+  ECSTaskExecutionRoleArn:
+    Condition: IsFargateTask
+    Description: The ARN of the task execution role.
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+
+  TaskRoleArn:
+    Description: The ARN of the task's role
+    Value: !If
+      - HasDefaultTaskRole
+      - !GetAtt DefaultTaskRole.Arn
+      - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}

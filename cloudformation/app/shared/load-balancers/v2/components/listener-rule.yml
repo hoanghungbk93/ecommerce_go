@@ -1,0 +1,75 @@
+---
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  LoadBalancerName:
+    Type: String
+    Default: ''
+    Description: >-
+      The name of the load balancer that this service should be served under.
+      Leaving thing blank will assume the load balancer is the same as the
+      ServiceName parameter.
+
+  ListenerArn:
+    Type: String
+    Description: >-
+      The ARN for the HTTP listener. Setting this overrides the default listener
+      ARN.
+    Default: ''
+
+  TargetGroupArn:
+    Type: String
+
+Conditions:
+
+  HasListenerArn: !Not [!Equals [!Ref ListenerArn, '']]
+  HasLoadBalancerName: !Not [!Equals [!Ref LoadBalancerName, '']]
+  UseCustomLoadBalancer: !And
+    - !Not [!Condition HasListenerArn]
+    - !Condition HasLoadBalancerName
+
+  UseListenerArn: !And
+    - !Condition HasListenerArn
+    - !Not [!Condition HasLoadBalancerName]
+
+Resources:
+
+  LoadBalancerRuleForNamedLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: UseCustomLoadBalancer
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref TargetGroupArn
+          Type: 'forward'
+      Conditions:
+        - Field: path-pattern
+          Values: ['*']
+      Priority: 99
+      ListenerArn:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:load-balancer:v2:${LoadBalancerName}:default-listener
+
+  LoadBalancerRuleForListenerArn:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Condition: UseListenerArn
+    Properties:
+      Actions:
+        - TargetGroupArn: !Ref TargetGroupArn
+          Type: 'forward'
+      Conditions:
+        - Field: path-pattern
+          Values: ['*']
+      Priority: 99
+      ListenerArn: !Ref ListenerArn
+
+Outputs:
+
+  TargetGroupArn:
+    Description: The ARN of the target group for this service
+    Value: !Ref TargetGroupArn
+
+
+# vim: set ft=yaml.cloudformation :

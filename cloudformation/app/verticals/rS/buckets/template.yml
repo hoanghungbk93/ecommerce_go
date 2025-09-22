@@ -1,0 +1,39 @@
+Description: Creates rS S3 buckets
+
+Parameters:
+  VerticalRootAccountARNs:
+    Type: AWS::SSM::Parameter::Value<CommaDelimitedList>
+    Default: /global/verticals/root-account-arns
+
+Resources:
+
+  DevOpsToolsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: rs-devops-tools
+
+  DevOpsToolsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DevOpsToolsBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${DevOpsToolsBucket}
+              - !Sub arn:aws:s3:::${DevOpsToolsBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/circle-artificer
+          - Action:
+              - s3:Get*
+              - s3:List*
+              - s3:PutObject*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${DevOpsToolsBucket}
+              - !Sub arn:aws:s3:::${DevOpsToolsBucket}/*
+            Principal:
+              AWS: !Ref VerticalRootAccountARNs

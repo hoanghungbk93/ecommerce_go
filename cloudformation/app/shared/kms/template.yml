@@ -1,0 +1,110 @@
+Description: Creates the KMS keys for use by a vertical.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  KeyAdministrators:
+    Description: Administrators of the key
+    Type: CommaDelimitedList
+
+  KeyUsers:
+    Description: Users of the key
+    Type: CommaDelimitedList
+
+Conditions:
+  IsQA: !Equals [!Ref EnvironmentName, "qa"]
+
+Resources:
+
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: For use by vertical apps to decrypt credentials stored in SSM parameter store.
+      Enabled: true
+      KeyPolicy:
+        Statement:
+          - Sid: Allow IAM user permissions.
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow administration of the key.
+            Effect: Allow
+            Principal:
+              AWS: !Ref KeyAdministrators
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: Allow use of the key.
+            Effect: Allow
+            Principal:
+              AWS: !Ref KeyUsers
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+            Resource: "*"
+
+  Alias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${EnvironmentName}/${VerticalName}
+      TargetKeyId: !Ref Key
+
+  # Adding this key's ID to parameter store under the ltk-ops path since
+  # ltk-ops is the only thing that needs to access the ID for the purpose of
+  # encrypting any credentials it generates. All other resources that need
+  # access to this key for decryption are controlled by allowing the
+  # kms:Decrypt action on their policy.
+
+  Parameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/ltk-ops/kms-key-ids/${VerticalName}/shared
+      Value: !Ref Key
+
+  # Creates a parameter entry for vertical specific kms-key-ids. This is really
+  # for the main account where multiple verticals share prod and qa environments.
+  # Furthermore, there is no QA version of ltk-ops. prod ltk-ops deploys
+  # both prod and qa environments. This means that QA KMS key IDs for verticals
+  # will exist under the /prod/ltk-ops namespace.
+  EnvironmentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub
+        - /${TargetEnvironment}/ltk-ops/kms-key-ids/${VerticalName}/${EnvironmentName}
+        - TargetEnvironment: !If
+            - IsQA
+            - prod
+            - !Ref EnvironmentName
+      Value: !Ref Key
+
+Outputs:
+
+  KeyArn:
+    Description: The ARN of the KMS key shared by vertical apps.
+    Value: !GetAtt Key.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn

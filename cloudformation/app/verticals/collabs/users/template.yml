@@ -1,0 +1,403 @@
+Description: Creates IAM groups, policies, and users for the collabs team.
+
+Parameters:
+
+  InitialPassword:
+    Description: The initial password for the users (MUST BE CHANGED!!!).
+    Default: 123Ch@ngeMe!
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  ####################
+  ##### Policies #####
+  ####################
+
+  SelfManagedIAMUserPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub collabs-self-managed-iam-access
+      Description: Allows IAM users to manage themselves and their MFA devices.
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AccessRights
+            Effect: Allow
+            Action:
+              - logs:Filter*
+              - logs:Test*
+              - ecs:StopTask
+              - ecs:StartTask
+              - cloudformation:*
+            Resource: "*"
+
+          - Sid: AssumeRoleInDevAccount
+            Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - arn:aws:iam::676403976676:role/*
+
+          - Sid: AllowAllUsersToListAccounts
+            Effect: Allow
+            Action:
+              - iam:ListAccountAliases
+              - iam:ListUsers
+              - iam:ListGroups
+              - iam:ListVirtualMFADevices
+              - iam:GetAccountPasswordPolicy
+              - iam:GetAccountSummary
+              - iam:ListAttachedGroupPolicies
+              - iam:GenerateServiceLastAccessedDetails
+              - iam:GetServiceLastAccessedDetails
+              - iam:ListGroupPolicies
+              - iam:GetAccessKeyLastUsed
+              - iam:GetGroup # allows users to see details of a group
+              - iam:ListPoliciesGrantingServiceAccess # allows access advisor access on groups
+              - iam:ListRoles
+              - iam:ListPolicies
+            Resource: "*"
+
+          - Sid: AllowIndividualUserToSeeAndManageOnlyTheirOwnAccountInformation
+            Effect: Allow
+            Action:
+              - iam:ChangePassword
+              - iam:CreateAccessKey
+              - iam:CreateLoginProfile
+              - iam:DeleteAccessKey
+              - iam:DeleteLoginProfile
+              - iam:GetLoginProfile
+              - iam:ListAccessKeys
+              - iam:UpdateAccessKey
+              - iam:UpdateLoginProfile
+              - iam:ListUserPolicies
+              - iam:ListAttachedUserPolicies
+              - iam:ListGroupsForUser
+              - iam:GetUser
+              - iam:ListPoliciesGrantingServiceAccess
+              - iam:ListServiceSpecificCredentials
+              - iam:ListSSHPublicKeys
+            Resource: arn:aws:iam::*:user/*${aws:username}
+
+          - Sid: AllowIndividualUserToListOnlyTheirOwnMFA
+            Effect: Allow
+            Action:
+              - iam:ListMFADevices
+            Resource:
+              - arn:aws:iam::*:mfa/*
+              - arn:aws:iam::*:user/*${aws:username}
+
+          - Sid: AllowIndividualUserToManageTheirOwnMFA
+            Effect: Allow
+            Action:
+              - iam:CreateVirtualMFADevice
+              - iam:DeleteVirtualMFADevice
+              - iam:EnableMFADevice
+              - iam:ResyncMFADevice
+            Resource:
+              - arn:aws:iam::*:mfa/${aws:username}
+              - arn:aws:iam::*:user/*${aws:username}
+
+          - Sid: AllowIndividualUserToDeactivateOnlyTheirOwnMFAOnlyWhenUsingMFA
+            Effect: Allow
+            Action:
+              - iam:DeactivateMFADevice
+            Resource:
+              - arn:aws:iam::*:mfa/${aws:username}
+              - arn:aws:iam::*:user/*${aws:username}
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: 'true'
+
+          - Sid: BlockMostAccessUnlessSignedInWithMFA
+            Effect: Deny
+            Action:
+              - iam:CreateAccessKey
+              - iam:ListAccessKeys
+              - iam:UpdateAccessKey
+              - iam:GetAccountSummary
+            Resource: "*"
+            Condition:
+              BoolIfExists:
+                aws:MultiFactorAuthPresent: 'false'
+
+          - Sid: AllowListEntitiesForPolicies
+            Effect: Allow
+            Action:
+              - iam:ListEntitiesForPolicy
+            Resource: arn:aws:iam::*:policy/*
+
+  DeveloperKMSAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Sub collabs-kms-access
+      Description: Allows IAM users to manage themselves and their MFA devices.
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AccessRights
+            Effect: Allow
+            Action:
+              - kms:Decrypt
+              - kms:Encrypt
+              - kms:Describe*
+              - kms:Get*
+              - kms:List*
+            Resource: "*"
+
+  ####################
+  ###### Groups ######
+  ####################
+
+  DevGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: collabs-developers
+      ManagedPolicyArns:
+        - !Ref SelfManagedIAMUserPolicy
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonSSMFullAccess
+        - !Ref DeveloperKMSAccessPolicy
+      Policies:
+        - PolicyName: sqs-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: sqs:*
+                Resource:
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:dev-collabs*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:prod-collabs*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:qa-collabs*
+        - PolicyName: data-pipeline-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: datapipeline:*
+                Resource: "*"
+        - PolicyName: cloudformation-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/collabs-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/dev-collabs-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/prod-collabs-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/qa-collabs-*
+        - PolicyName: cloudformation-resource-management
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                Resource:
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:qa-collabs-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:prod-collabs-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:dev-collabs-*
+              - Effect: Allow
+                Action:
+                  - events:*
+                Resource:
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/qa-collabs-*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/prod-collabs-*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/dev-collabs-*
+              - Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:DeletePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/dev-collabs-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/dev-collabs-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/qa-collabs-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/qa-collabs-*
+        - PolicyName: full-ecs-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecs:*
+                Condition:
+                  StringLike:
+                    ecs:cluster:
+                      - !Sub arn:aws:ecs::${AWS::AccountId}:cluster/*-collabs-*
+                Resource:
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:task-definition/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:task/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:container-instance/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:cluster/*
+        - PolicyName: ecr-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:CompleteLayerUpload
+                  - ecr:DescribeRepositories
+                  - ecr:Get*
+                  - ecr:InitiateLayerUpload
+                  - ecr:ListImages
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Resource: '*'
+        - PolicyName: s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - arn:aws:s3:::*-collabs*
+                  - arn:aws:s3:::collabs*
+
+
+  QaGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: collabs-qa
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - !Ref SelfManagedIAMUserPolicy
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+      Policies:
+        - PolicyName: s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - arn:aws:s3:::dev-collabs*
+                  - arn:aws:s3:::qa-collabs*
+
+  AdminGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: collabs-admins
+      Policies:
+        - PolicyName: collabs-admin-cloudformation-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/*collabs*
+        - PolicyName: collabs-admin-iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: iam:*
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/*
+              - Effect: Allow
+                Action:
+                  - iam:GenerateServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetailsWithEntities
+                  - iam:ListPoliciesGrantingServiceAccess
+                Resource: "*"
+
+  ###################
+  ###### Users ######
+  ###################
+
+  IanChiles:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ian.chiles
+      Path: /collabs/developers/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+
+  MichaelHoglan:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: michael.hoglan
+      Path: /collabs/admins/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+        - !Ref AdminGroup
+
+  PatrickNordahl:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: patrick.nordahl
+      Path: /collabs/developers/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+
+  ForrestJordan:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: forrest.jordan
+      Path: /collabs/admins/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+        - !Ref AdminGroup
+
+  RyanKoval:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ryan.koval
+      Path: /collabs/developers/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+
+  JasonYu:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: jason.yu
+      Path: /collabs/developers/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+
+  ZachGagnon:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: zach.gagnon
+      Path: /collabs/qa/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref QaGroup
+
+  ZSposato:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: z.sposato
+      Path: /collabs/qa/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref QaGroup
+
+  TestUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: test-user
+      Path: /collabs/test/
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup

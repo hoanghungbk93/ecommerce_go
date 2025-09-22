@@ -1,0 +1,530 @@
+Description: Creates a Memcached ElastiCache cluster.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, staging, prod]
+
+  SubEnvironmentName:
+    Description: The name of the subenvironment.
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the cluster. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix.
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ClusterName:
+    Description: The name of the cluster.
+    Type: String
+    MaxLength: 12
+
+  AutoNameCluster:
+    Description: >
+      This parameter defines if the Memcached cluster should NOT be explicitly named. If true a random name will
+      be generated and the ClusterName parameter will be used as the tag Name on the created cluster resource.
+    Type: String
+    Default: false
+    AllowedValues: [false, true]
+
+  EngineVersion:
+    Description: The version of the engine to use.
+    Type: String
+    Default: 1.4.34
+
+  NodeType:
+    Description: The compute and memory capacity of nodes in the Memcached cluster.
+    Type: String
+
+  NumCacheNodes:
+    Description: The number of cache nodes that the cache cluster should have.
+    Type: Number
+    Default: 1
+
+  AutoMinorVersionUpgrade:
+    Description: Indicates that minor engine upgrades can be a applied automatically during the maintenance window.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  CPUHighThreshold:
+    Description: The threshold at which the cluster's CPU triggers an alarm (percent).
+    Type: Number
+    Default: 85
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the CacheCluster's CPU is sampled.
+    Type: Number
+    Default: 60
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 5
+
+  CPUHighUrgency:
+    Description: The urgency to use on high CPU alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: "critical"
+
+  MemoryUsageHighThreshold:
+    Description: The threshold at which the cluster's consumed memory should raise an alarm ( in percent 0 - 100 )
+    Type: Number
+    Default: 75
+
+  MemoryUsageHighPeriod:
+    Description: The number of seconds over which the cluster's memory usage is sampled.
+    Type: Number
+    Default: 60
+
+  MemoryUsageHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high memory threshold.
+    Type: Number
+    Default: 5
+
+  MemoryUsageHighUrgency:
+    Description: The urgency to use on memory usage high alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: "critical"
+
+  EvictionsHighThreshold:
+    Description: |
+      The threshold at which the cluster's eviction count should raise an alarm
+      If 0, no alarm is created.
+    Type: Number
+    Default: 1
+
+  EvictionsHighPeriod:
+    Description: The number of seconds over which the cluster's eviction count is sampled.
+    Type: Number
+    Default: 60
+
+  EvictionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high eviction count threshold.
+    Type: Number
+    Default: 5
+
+  EvictionsHighUrgency:
+    Description: The urgency to use on high eviction count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: "critical"
+
+  ConnectionsHighThreshold:
+    Description: >
+      The threshold at which the cluster's connection count should raise an alarm
+      As of 2019-07-02 the default connection limit is 65000.
+      If 0, no alarm is created.
+    Type: Number
+    Default: 32500
+
+  ConnectionsHighPeriod:
+    Description: The number of seconds over which the cluster's connection count is sampled.
+    Type: Number
+    Default: 60
+
+  ConnectionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high connection count threshold.
+    Type: Number
+    Default: 5
+
+  ConnectionsHighUrgency:
+    Description: The urgency to use on high connection count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: "critical"
+
+  NewConnectionsHighThreshold:
+    Description: |
+      The threshold at which the cluster's new-connection count should raise an alarm
+      If 0, no alarm is created.
+    Type: Number
+    Default: 10000
+
+  NewConnectionsHighPeriod:
+    Description: The number of seconds over which the cluster's new-connection count is sampled.
+    Type: Number
+    Default: 60
+
+  NewConnectionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high new-connection count threshold.
+    Type: Number
+    Default: 5
+
+  NewConnectionsHighUrgency:
+    Description: The urgency to use on high new connection count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: "critical"
+
+Mappings:
+
+  # last updated: 2019-05-29 from https://docs.aws.amazon.com/AmazonElastiCache/latest/mem-ug/ParameterGroups.Memcached.html
+  # => (2022-09-20) added mappings for recommended types (t3+m6g+r6g); deprecated previous generation per https://aws.amazon.com/elasticache/previous-generation
+
+  NodeTypes:
+    cache.t3.micro:
+      MaxMemoryBytes: 536870912
+    cache.t3.small:
+      MaxMemoryBytes: 1470103552
+    cache.t3.medium:
+      MaxMemoryBytes: 3527409664
+
+    cache.m4.large:
+      MaxMemoryBytes: 6892593152
+    cache.m4.xlarge:
+      MaxMemoryBytes: 15328501760
+    cache.m4.2xlarge:
+      MaxMemoryBytes: 31889126359
+    cache.m4.4xlarge:
+      MaxMemoryBytes: 65257290629
+    cache.m4.10xlarge:
+      MaxMemoryBytes: 166047614239
+
+    cache.m5.large:
+      MaxMemoryBytes: 6854542746
+    cache.m5.xlarge:
+      MaxMemoryBytes: 13891921715
+    cache.m5.2xlarge:
+      MaxMemoryBytes: 27966669210
+    cache.m5.4xlarge:
+      MaxMemoryBytes: 56116178125
+    cache.m5.12xlarge:
+      MaxMemoryBytes: 168715971994
+    cache.m5.24xlarge:
+      MaxMemoryBytes: 337500562842
+
+    cache.m6g.4xlarge:
+      MaxMemoryBytes: 56115593216
+
+    cache.r4.large:
+      MaxMemoryBytes: 13201781556
+    cache.r4.xlarge:
+      MaxMemoryBytes: 26898228839
+    cache.r4.2xlarge:
+      MaxMemoryBytes: 54197537997
+    cache.r4.4xlarge:
+      MaxMemoryBytes: 108858546586
+    cache.r4.8xlarge:
+      MaxMemoryBytes: 218255432090
+    cache.r4.16xlarge:
+      MaxMemoryBytes: 437021573120
+
+    cache.r5.large:
+      MaxMemoryBytes: 14037181030
+    cache.r5.xlarge:
+      MaxMemoryBytes: 28261849702
+    cache.r5.2xlarge:
+      MaxMemoryBytes: 56711183565
+    cache.r5.4xlarge:
+      MaxMemoryBytes: 113609865216
+    cache.r5.12xlarge:
+      MaxMemoryBytes: 341206346547
+    cache.r5.24xlarge:
+      MaxMemoryBytes: 682485973811
+
+    cache.r6g.8xlarge:
+      MaxMemoryBytes: 225000292352
+
+    # the following node types have been deprecated but are kept for backwards compatibility
+    cache.t1.micro:
+      MaxMemoryBytes: 142606336
+
+    cache.t2.micro:
+      MaxMemoryBytes: 581959680
+    cache.t2.small:
+      MaxMemoryBytes: 1665138688
+    cache.t2.medium:
+      MaxMemoryBytes: 3461349376
+
+    cache.m1.small:
+      MaxMemoryBytes: 943718400
+    cache.m1.medium:
+      MaxMemoryBytes: 3093299200
+    cache.m1.large:
+      MaxMemoryBytes: 7025459200
+    cache.m1.xlarge:
+      MaxMemoryBytes: 14889779200
+
+    cache.m2.xlarge:
+      MaxMemoryBytes: 17091788800
+    cache.m2.2xlarge:
+      MaxMemoryBytes: 35022438400
+    cache.m2.4xlarge:
+      MaxMemoryBytes: 70883737600
+
+    cache.m3.medium:
+      MaxMemoryBytes: 2988441600
+    cache.m3.large:
+      MaxMemoryBytes: 6501171200
+    cache.m3.xlarge:
+      MaxMemoryBytes: 14260633600
+    cache.m3.2xlarge:
+      MaxMemoryBytes: 29989273600
+
+    cache.c1.xlarge:
+      MaxMemoryBytes: 6501171200
+
+    cache.r3.large:
+      MaxMemoryBytes: 14470348800
+    cache.r3.xlarge:
+      MaxMemoryBytes: 30513561600
+    cache.r3.2xlarge:
+      MaxMemoryBytes: 62495129600
+    cache.r3.4xlarge:
+      MaxMemoryBytes: 126458265600
+    cache.r3.8xlarge:
+      MaxMemoryBytes: 254384537600
+
+Conditions:
+
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasCPUHighAlarm: !Not [!Equals [!Ref CPUHighThreshold, 0]]
+  HasEvictionsHighAlarm: !Not [!Equals [!Ref EvictionsHighThreshold, 0]]
+  HasConnectionsHighAlarm: !Not [!Equals [!Ref ConnectionsHighThreshold, 0]]
+  HasNewConnectionsHighAlarm: !Not [!Equals [!Ref NewConnectionsHighThreshold, 0]]
+  HasMemoryUsageHighAlarm: !Not [!Equals [!Ref MemoryUsageHighThreshold, 0]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+  HasExplicitlyNameCluster: !Equals [!Ref AutoNameCluster, "false" ]
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  SubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub ${Namespace}-${ClusterName}
+      Description: !Sub Subnet group for the ${Namespace}-${ClusterName} Memcached cluster.
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+
+  CacheCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: !If
+        - HasExplicitlyNameCluster
+        - !Sub ${Namespace}-${ClusterName}
+        - !Ref AWS::NoValue
+      Engine: memcached
+      EngineVersion: !Ref EngineVersion
+      Port: 11211
+      CacheNodeType: !Ref NodeType
+      NumCacheNodes: !Ref NumCacheNodes
+      AutoMinorVersionUpgrade: !Ref AutoMinorVersionUpgrade
+      CacheSubnetGroupName: !Ref SubnetGroup
+      VpcSecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${ClusterName}
+
+  HostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/memcached/${ClusterName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt CacheCluster.ConfigurationEndpoint.Address
+
+  PortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/memcached/${ClusterName}/port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt CacheCluster.ConfigurationEndpoint.Port
+
+  EvictionsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasEvictionsHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-evictions
+      AlarmDescription: !Sub "${EvictionsHighUrgency}: memcached: ${Namespace}-${ClusterName} cluster evictions are high."
+      Namespace: AWS/ElastiCache
+      MetricName: Evictions
+      Unit: Count
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref EvictionsHighThreshold
+      Period: !Ref EvictionsHighPeriod
+      EvaluationPeriods: !Ref EvictionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref CacheCluster
+
+  MemoryUsageHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMemoryUsageHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-memory
+      AlarmDescription: !Sub "${MemoryUsageHighUrgency}: memcached: ${Namespace}-${ClusterName} cluster memory usage is high."
+      Metrics:
+        - Id: e1
+          Label: percentMemoryUsed
+          Expression: !Sub
+            - "100*(${MaxMemoryBytes}-m1)/${MaxMemoryBytes}"
+            - MaxMemoryBytes: !FindInMap [NodeTypes, !Ref NodeType, MaxMemoryBytes]
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: UnusedMemory
+              Namespace: AWS/ElastiCache
+              Dimensions:
+                - Name: CacheClusterId
+                  Value: !Ref CacheCluster
+            Period: !Ref MemoryUsageHighPeriod
+            Stat: Average
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref MemoryUsageHighThreshold
+      EvaluationPeriods: !Ref MemoryUsageHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasCPUHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-cpu
+      AlarmDescription: !Sub "${CPUHighUrgency}: memcached: ${Namespace}-${ClusterName} cluster CPU is high."
+      Namespace: AWS/ElastiCache
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref CacheCluster
+
+  ConnectionsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasConnectionsHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-connections
+      AlarmDescription: !Sub "${CPUHighUrgency}: memcached: ${Namespace}-${ClusterName} cluster connections is high."
+      Namespace: AWS/ElastiCache
+      MetricName: CurrConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ConnectionsHighThreshold
+      Period: !Ref ConnectionsHighPeriod
+      EvaluationPeriods: !Ref ConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref CacheCluster
+
+  NewConnectionsHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasNewConnectionsHighAlarm
+    Properties:
+      AlarmName: !Sub ${Namespace}-${ClusterName}-high-new-connections
+      AlarmDescription: !Sub "${NewConnectionsHighUrgency}: memcached: ${Namespace}-${ClusterName} cluster new connections are high."
+      Namespace: AWS/ElastiCache
+      MetricName: NewConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref NewConnectionsHighThreshold
+      Period: !Ref NewConnectionsHighPeriod
+      EvaluationPeriods: !Ref NewConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref CacheCluster
+
+Outputs:
+
+  Host:
+    Description: The Memcached host.
+    Value: !GetAtt CacheCluster.ConfigurationEndpoint.Address
+
+  Port:
+    Description: The Memcached port.
+    Value: !GetAtt CacheCluster.ConfigurationEndpoint.Port

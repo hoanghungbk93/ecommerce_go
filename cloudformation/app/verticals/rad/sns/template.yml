@@ -1,0 +1,69 @@
+Description: Creates SNS topics for rad usage.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+Mappings:
+
+  # Note that dev and qa critical urgency alerts are sent to the low urgency
+  # pagerduty endpoint. We don't want dev and qa waking people up at night.
+
+  PagerDutyEndpoints:
+    dev:
+      LowUrgency: https://events.pagerduty.com/integration/b8eae956b3bb4b62bd6b04d5e88ed268/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/b8eae956b3bb4b62bd6b04d5e88ed268/enqueue
+    qa:
+      LowUrgency: https://events.pagerduty.com/integration/b8eae956b3bb4b62bd6b04d5e88ed268/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/b8eae956b3bb4b62bd6b04d5e88ed268/enqueue
+    prod:
+      LowUrgency: https://events.pagerduty.com/integration/77861ac2022b449c9cb6f715d6c57f6e/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/c8af15a2e875412b910a8c065ab77d78/enqueue
+
+Resources:
+
+  LowUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-${VerticalName}-low-urgency-alerts
+
+  LowUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LowUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, LowUrgency]
+      Protocol: https
+
+  CriticalUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-${VerticalName}-critical-urgency-alerts
+
+  CriticalUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, CriticalUrgency]
+      Protocol: https
+
+Outputs:
+
+  LowUrgencyAlertsTopicArn:
+    Description: The ARN of the low urgency alerts SNS topic.
+    Value: !Ref LowUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-low-urgency-alerts-topic-arn
+
+  CriticalUrgencyAlertsTopicArn:
+    Description: The ARN of the critical urgency alerts SNS topic.
+    Value: !Ref CriticalUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-critical-urgency-alerts-topic-arn

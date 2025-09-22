@@ -1,0 +1,30 @@
+---
+- name: Setup PostgreSQL HA Cluster
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Wait for system to be ready
+      wait_for:
+        path: /var/log/user_data_complete
+        timeout: 300
+
+- name: Configure etcd cluster
+  hosts: etcd_nodes
+  become: yes
+  roles:
+    - etcd
+
+- name: Configure PostgreSQL with Patroni
+  hosts: postgres_nodes
+  become: yes
+  roles:
+    - postgresql
+    - patroni
+
+- name: Configure HAProxy
+  hosts: haproxy_nodes
+  become: yes
+  roles:
+    - haproxy

@@ -1,0 +1,28 @@
+Description: Creates Route53 entries for collabs usage.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Conditions:
+  IsDev: !Equals [!Ref EnvironmentName, dev]
+
+Resources:
+
+  DevHostedZone:
+    Condition: IsDev
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: collabs.local
+      HostedZoneConfig:
+        Comment: Hosted zone for internal collabs resources.
+      VPCs:
+        - VPCId:
+            Fn::ImportValue: !Sub ${EnvironmentName}-collabs-vpc-id
+          VPCRegion: !Ref AWS::Region
+      HostedZoneTags:
+        - Key: Vertical
+          Value: collabs

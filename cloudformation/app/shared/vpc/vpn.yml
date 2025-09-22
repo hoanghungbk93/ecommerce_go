@@ -1,0 +1,260 @@
+Description: |
+  Creates a VPN server and a bastion host.
+  Note that it is highly likely that the bastion will get recreated on deploy
+  because it is always using the latest ECS Optimized AMI and does not have a
+  persistent disk mount.
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Description: The name of the target environment.
+
+  VerticalName:
+    Type: String
+    Description: Name of the vertical
+    AllowedPattern: "[a-z0-9-]+"
+
+  VpnAdminEmail:
+    Type: String
+    Description: >
+      The email address used as the OpenVPN administrator email address.
+
+  PrivateSubnet:
+    Type: String
+    Description: CIDR block of the VPC
+
+  VpnInstanceType:
+    Type: String
+    Description: The instance type used for the OpenVPN server.
+    Default: t1.micro
+    AllowedValues: [t1.micro]
+
+  BastionInstanceType:
+    Type: String
+    Description: The instance type used for the bastion instance.
+    Default: t2.micro
+    AllowedValues: [t2.micro, t2.small]
+
+  ECSAMI:
+    Description: AMI ID
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /aws/service/ecs/optimized-ami/amazon-linux/recommended/image_id
+
+
+# AMI docs:
+# https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
+
+
+Mappings:
+  AMIs:
+    ap-southeast-1:
+      TurnkeyOpenVPN130amd64: ami-18d5e84a
+    ap-southeast-2:
+      TurnkeyOpenVPN130amd64: ami-8f89f4b5
+    us-west-2:
+      TurnkeyOpenVPN130amd64: ami-fd6256cd
+    ap-southeast-1:
+      TurnkeyOpenVPN130amd64: ami-4ce1e724
+    ap-northeast-1:
+      TurnkeyOpenVPN130amd64: ami-6213d462
+    us-west-1:
+      TurnkeyOpenVPN130amd64: ami-bfcd20fb
+    eu-west-1:
+      TurnkeyOpenVPN130amd64: ami-cf1577b8
+    sa-east-1:
+      TurnkeyOpenVPN130amd64: ami-311c992c
+
+Resources:
+
+  BastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Fn::ImportValue: !Join
+          - ":"
+          - - !Ref EnvironmentName
+            - vpc
+            - id
+      GroupDescription: Allows external access for SSH and VPN
+      Tags:
+      - Key: Name
+        Value: !Sub ${EnvironmentName}-${VerticalName}-vpc-bastion
+      - Key: Environment
+        Value: !Ref EnvironmentName
+      - Key: Vpc
+        Value:
+          Fn::ImportValue: !Join
+            - ":"
+            - - !Ref EnvironmentName
+              - vpc
+              - id
+
+  BastionSecurityGroupIngressSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      ToPort: 22
+      FromPort: 22
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: tcp
+
+  BastionSecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      ToPort: 65535
+      FromPort: 0
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: "-1"
+
+  BastionSecurityGroupIngressHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      ToPort: 80
+      FromPort: 80
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: tcp
+
+  BastionSecurityGroupIngressHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      ToPort: 443
+      FromPort: 443
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: tcp
+
+  BastionSecurityGroupIngressUpd:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      ToPort: 1194
+      FromPort: 1194
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref BastionSecurityGroup
+      IpProtocol: udp
+
+  AllowBastionSshDefaultSecurityGroupIngressSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      FromPort: 22
+      ToPort: 22
+      GroupId:
+        Fn::ImportValue: !Join
+          - ":"
+          - - !Ref EnvironmentName
+            - vpc
+            - default-security-group
+      IpProtocol: tcp
+
+  AllowBastionSshDefaultSecurityGroupIngressMysql:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      FromPort: 3306
+      ToPort: 3306
+      GroupId:
+        Fn::ImportValue: !Join
+          - ":"
+          - - !Ref EnvironmentName
+            - vpc
+            - default-security-group
+      IpProtocol: tcp
+
+  AllowBastionSshDefaultSecurityGroupIngressHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      SourceSecurityGroupId: !Ref BastionSecurityGroup
+      FromPort: 80
+      ToPort: 80
+      GroupId:
+        Fn::ImportValue: !Join
+          - ":"
+          - - !Ref EnvironmentName
+            - vpc
+            - default-security-group
+      IpProtocol: tcp
+
+  Bastion:
+    Type: AWS::EC2::Instance
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub ${EnvironmentName}-${VerticalName}-vpc-bastion
+      - Key: Environment
+        Value: !Ref EnvironmentName
+      ImageId: !Ref ECSAMI
+      KeyName: !Sub ${VerticalName}-team
+      SubnetId: !Select
+        - 0
+        - !Split
+          - ","
+          - Fn::ImportValue: !Join
+              - ":"
+              - - !Ref EnvironmentName
+                - vpc
+                - public-subnets
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      InstanceType: !Ref BastionInstanceType
+
+  BastionElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref Bastion
+      Domain: vpc
+
+  OpenVpnServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -e
+          cat>/etc/inithooks.conf<<EOF
+          export ROOT_PASS=$(dd if=/dev/urandom count=18 bs=1 | base64)
+          export HUB_APIKEY=SKIP
+          export SEC_UPDATES=FORCE
+          export APP_PROFILE=server
+          export APP_DOMAIN=${OpenVpnElasticIp}
+          export APP_VIRTUAL_SUBNET=172.27.240.0/24
+          export APP_PRIVATE_SUBNET=${PrivateSubnet}
+          export APP_EMAIL=${VpnAdminEmail}
+          EOF
+      SourceDestCheck: "false"
+      Tags:
+      - Key: Name
+        Value: !Sub ${EnvironmentName}-${VerticalName}-vpn
+      - Key: Environment
+        Value: !Ref EnvironmentName
+      SecurityGroupIds:
+        - !Ref BastionSecurityGroup
+      KeyName: !Sub ${VerticalName}-team
+      SubnetId: !Select
+        - 0
+        - !Split
+          - ","
+          - Fn::ImportValue: !Join
+              - ":"
+              - - !Ref EnvironmentName
+                - vpc
+                - public-subnets
+      ImageId: !FindInMap
+        - AMIs
+        - !Ref AWS::Region
+        - TurnkeyOpenVPN130amd64
+      InstanceType: !Ref VpnInstanceType
+
+  OpenVpnElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  OpenVpnElasticIpAssc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref OpenVpnServer
+      AllocationId: !GetAtt
+        - OpenVpnElasticIp
+        - AllocationId

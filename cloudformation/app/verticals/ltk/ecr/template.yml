@@ -1,0 +1,795 @@
+Description: Creates ECR repositories for LTK.
+
+Resources:
+
+  Leeloo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-leeloo
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkOps:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-ops
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkPythonImages:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk/base/python
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkLambdaFollowerFeedFanoutSupplier:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-lambda-follower-feed-fanout-supplier
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkFollowerFeedConsumer:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-follower-feed-consumer
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkFollowerService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-follower-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkRecoService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-reco-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkImagesizer:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-imagesizer
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkPublisherService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-publisher-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkShortLinksService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-short-links-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  FavoritesService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: favorites-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkLikesService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-likes-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkAutoFollower:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-auto-follower
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkSpa:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-spa
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkWeb:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-web
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkAdmin:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-admin
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkOpsExamplesECS:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-ops-examples-ecs
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkImageService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-image-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkAutomation:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk_automation
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from LTK dev and automation accounts
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  MobileSuiteGundam:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: mobile-suite-gundam
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from LTK dev and automation accounts
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkProductService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-product-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from dev AWS accounts.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkProductIngestion:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-product-ingestion
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from dev AWS accounts.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  Ronin:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ronin
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: Allow access from dev AWS account.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkReAuthScheduler:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-ig-auth-email-scheduler
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkLikesScraperScheduler:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-likes-scraper-scheduler
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkLikesScraper:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-likes-scraper
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkLikesEmailScheduler:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-likes-email-scheduler
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkMigrator:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-migrator
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkWishListService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-wish-list-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkFeedEmailer:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-feed-emailer
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkSearchService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-search-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  RsProductService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: rs-product-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  PubRetailerRulesService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: pub-retailer-rules-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  RsPrivacyService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: rs-privacy-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+
+  LtkRecentProductsService:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: ltk-recent-products-service
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::282492028148:root # ltk-dev
+                - arn:aws:iam::406233834736:root # publishing
+                - arn:aws:iam::676403976676:root # collabs
+                - arn:aws:iam::232188586941:root # rad
+                - arn:aws:iam::022925635359:root # devopia
+                - arn:aws:iam::793734892668:root # automation
+            Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability

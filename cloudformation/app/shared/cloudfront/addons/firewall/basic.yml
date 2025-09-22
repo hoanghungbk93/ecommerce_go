@@ -1,0 +1,75 @@
+Description: Creates a Global Web Application Firewall with auto and manual block ipsets rules on an ALB resource
+
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+
+  ProjectName:
+    Type: String
+
+
+Resources:
+
+  ManualBlockIPSet:
+    Type: AWS::WAF::IPSet
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-manual
+
+  AutoBlockIPSet:
+    Type: AWS::WAF::IPSet
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-auto
+
+  ManualBlockRule:
+    Type: AWS::WAF::Rule
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-manual
+      MetricName: ManualBlockRule
+      Predicates:
+        - DataId: !Ref ManualBlockIPSet
+          Negated: false
+          Type: IPMatch
+
+  AutoBlockRule:
+    Type: AWS::WAF::Rule
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-auto
+      MetricName: AutoBlockRule
+      Predicates:
+        - DataId: !Ref AutoBlockIPSet
+          Negated: false
+          Type: IPMatch
+
+  WebACL:
+    Type: AWS::WAF::WebACL
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}
+      DefaultAction:
+        Type: ALLOW
+      MetricName: Abusers
+      Rules:
+        - Action:
+            Type: BLOCK
+          Priority: 1
+          RuleId: !Ref ManualBlockRule
+        - Action:
+            Type: BLOCK
+          Priority: 2
+          RuleId: !Ref AutoBlockRule
+
+
+Outputs:
+
+  WebACLId:
+    Description: Id of the web acl
+    Value: !Ref WebACL
+
+  AutoBlockIPSet:
+    Description: Id of the auto blocking IPSet
+    Value: !Ref AutoBlockIPSet
+
+  ManualBlockIPSet:
+    Description: Id of the manual blocking IPSet
+    Value: !Ref ManualBlockIPSet

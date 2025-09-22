@@ -1,0 +1,314 @@
+Description: Creates an ECS daemon service to run the DataDog agent on all EC2 instances in an ECS cluster.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment. All metrics sent to DataDog will be tagged with the environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: The name of the vertical which will be used for tagging the metrics and logs sent to DataDog.
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  ClusterName:
+    Description: The name of the cluster that the agent should run on.
+    Type: String
+
+  AgentVersion:
+    Description: The version of the DataDog agent to run.
+    Type: String
+    Default: latest
+
+  APIKey:
+    Description: The DataDog API key.
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /global/datadog/api-key
+
+  CPU:
+    Description: The number of CPU units to reserve for the agent's container.
+    Type: Number
+    Default: 10
+
+  Memory:
+    Description: >
+      The max number of MiB that each task may consume (hard limit).
+      You must specify one or both of Memory and MemoryReservation.
+    Type: Number
+    Default: 256
+
+  AgentLogLevel:
+    Description: Set to true to enable APM.
+    Type: String
+    AllowedValues: [debug, info, error]
+    Default: error
+
+  EnableAPM:
+    Description: Set to true to enable APM.
+    Type: String
+    AllowedValues: [true, false]
+
+  EnableDogStatsD:
+    Description: Set to false to disable dogstatsd.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  EnableLogCollection:
+    Description: >
+      Set to true if the DataDog agent should collect Docker logs on the system. Note that if
+      log collection is enabled you must also set EnableCloudWatchLogging to false in the service.
+    Type: String
+    AllowedValues: [true, false]
+
+  IgnoreResources:
+    Description: Blacklist of regular expressions to disable traces based on the resource name.
+    Type: String
+    Default: '"GET /healthcheck","GET /health","GET /status"'
+
+  APMAnalyzedSpans:
+    Description: >
+      Map of spans to be analyzed and available in the "Trace Search & Analytics" tab. Should be in the
+      format service_name|operation_name=rate,other_service|other_operation=rate (e.g. my-service|http.request=1).
+    Type: String
+    Default: ""
+
+  ServiceName:
+    Type: String
+    Description: >-
+      The name of the project or service that this datadog agent is for.
+      Setting this enables service discovery for the datadog agent and this is
+      used as the prefix of the service discoverable domain.
+    Default: ''
+
+  OnlyLogs:
+    Type: String
+    Description: >-
+      If this option is left empty then APM, custom metrics, and infrastructure host monitoring will be disabled when the env is dev.
+      When host LogsOnly is enabled then APM, custom metrics, and infrastructure host monitoring will be disabled.
+    AllowedValues: ["", "enabled", "disabled"]
+    Default: ""
+
+Conditions:
+
+  LogCollectionEnabled: !Equals [!Ref EnableLogCollection, true]
+  HasServiceDiscovery: !Not [!Equals [!Ref ServiceName, '']]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  OnlyLogsEnabled: !Or [!Equals [!Ref OnlyLogs, "enabled"], !And [!Equals [!Ref OnlyLogs, ""], !Equals [!Ref EnvironmentName, dev]]]
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      TaskDefinition: !Ref TaskDefinition
+      SchedulingStrategy: DAEMON
+      NetworkConfiguration: !If
+        - HasServiceDiscovery
+        -
+          AwsvpcConfiguration:
+            AssignPublicIp: DISABLED
+            SecurityGroups:
+              - Fn::ImportValue: !Sub >-
+                  ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+            Subnets: !Split
+              - ","
+              - Fn::ImportValue: !Sub >-
+                  ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+        - !Ref AWS::NoValue
+      ServiceRegistries: !If
+        - HasServiceDiscovery
+        -
+          - RegistryArn: !GetAtt ServiceDiscoveryService.Arn
+        - !Ref AWS::NoValue
+
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Condition: HasServiceDiscovery
+    Properties:
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: '60'
+        RoutingPolicy: WEIGHTED
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: !Join
+        - "-"
+        - - !If [HasSubEnvironment, !Ref SubEnvironmentName, !Ref AWS::NoValue]
+          - !Sub ${ServiceName}.datadog
+      NamespaceId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:service-discovery:private-dns-namespace:env:id
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub
+        - ${Prefix}--datadog-agent-task
+        - Prefix: !If
+            - HasServiceDiscovery
+            - !Sub ${ServiceName}-svc
+            - !Sub ${ClusterName}-cluster
+      TaskRoleArn: !GetAtt DefaultTaskRole.Arn
+      NetworkMode: !If [HasServiceDiscovery, awsvpc, !Ref 'AWS::NoValue']
+      Volumes:
+        - Host:
+            SourcePath: /var/run/docker.sock
+          Name: docker_sock
+        - Host:
+            SourcePath: /proc/
+          Name: proc
+        - Host:
+            SourcePath: /opt/datadog-agent/run
+          Name: pointdir
+        - Host:
+            SourcePath: /cgroup/
+          Name: cgroup
+      ContainerDefinitions:
+        - Name: datadog-agent
+          Image: !Sub datadog/agent:${AgentVersion}
+          Cpu: !Ref CPU
+          Memory: !Ref Memory
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8126
+              HostPort: 8126
+              Protocol: tcp
+            - ContainerPort: 8125
+              HostPort: 8125
+              Protocol: udp
+          MountPoints:
+            - ContainerPath: /var/run/docker.sock
+              SourceVolume: docker_sock
+              ReadOnly: true
+            - ContainerPath: /host/sys/fs/cgroup
+              SourceVolume: cgroup
+              ReadOnly: true
+            - !If
+              - LogCollectionEnabled
+              - ContainerPath: /opt/datadog-agent/run
+                SourceVolume: pointdir
+                ReadOnly: false
+              - !Ref AWS::NoValue
+            - ContainerPath: /host/proc
+              SourceVolume: proc
+              ReadOnly: true
+          LinuxParameters:
+            InitProcessEnabled: true
+          LogConfiguration:
+            LogDriver: json-file
+            Options:
+              max-size: "10m"
+              max-file: "3"
+          Environment:
+            - Name: ENV
+              Value: !Ref Namespace
+            - Name: SD_BACKEND
+              Value: docker
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: DD_API_KEY
+              Value: !Ref APIKey
+            - Name: DD_USE_DOGSTATSD
+              Value: !If [OnlyLogsEnabled, "false", !Ref EnableDogStatsD]
+            - Name: DD_APM_ENABLED
+              Value: !If [OnlyLogsEnabled, "false", !Ref EnableAPM]
+            - Name: DD_LOGS_ENABLED
+              Value: !Ref EnableLogCollection
+            - Name: DD_LOGS_CONFIG_CONTAINER_COLLECT_ALL
+              Value: !Ref EnableLogCollection
+            - Name: DD_AC_EXCLUDE
+              Value: "image:datadog/agent image:amazon/amazon-ecs-agent"
+            - Name: DD_IGNORE_RESOURCE
+              Value: !Ref IgnoreResources
+            - Name: DD_APM_ANALYZED_SPANS
+              Value: !Ref APMAnalyzedSpans
+            - Name: DD_LOG_LEVEL
+              Value: !Ref AgentLogLevel
+            - Name: DD_DOGSTATSD_NON_LOCAL_TRAFFIC
+              Value: !If [OnlyLogsEnabled, "false", true]
+            - Name: DD_TAGS
+              Value: !Join
+                - " "
+                - - !Sub env:${Namespace}
+                  - !Sub cluster:${ClusterName}
+                  - !Sub vertical:${VerticalName}
+                  - !If
+                    - OnlyLogsEnabled
+                    - only_logs:enabled
+                    - !Ref AWS::NoValue
+            # https://docs.datadoghq.com/logs/guide/how-to-set-up-only-logs/?tab=docker
+            - !If
+              - OnlyLogsEnabled
+              - Name: DD_ENABLE_PAYLOADS_EVENTS
+                Value: "false"
+              - !Ref AWS::NoValue
+            - !If
+              - OnlyLogsEnabled
+              - Name: DD_ENABLE_PAYLOADS_SERIES
+                Value: "false"
+              - !Ref AWS::NoValue
+            - !If
+              - OnlyLogsEnabled
+              - Name: DD_ENABLE_PAYLOADS_SERVICE_CHECKS
+                Value: "false"
+              - !Ref AWS::NoValue
+            - !If
+              - OnlyLogsEnabled
+              - Name: DD_ENABLE_PAYLOADS_SKETCHES
+                Value: "false"
+              - !Ref AWS::NoValue
+
+  DefaultTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: datadog-policies
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RegisterContainerInstance
+                  - ecs:DeregisterContainerInstance
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Submit*
+                  - ecs:Poll
+                  - ecs:StartTask
+                  - ecs:StartTelemetrySession
+                Resource:
+                  - "*"
+
+Outputs:
+
+  TaskDefinitionArn:
+    Description: The ARN of the task definition.
+    Value: !Ref TaskDefinition
+
+  TaskRoleArn:
+    Description: The ARN of the task's role.
+    Value: !GetAtt DefaultTaskRole.Arn

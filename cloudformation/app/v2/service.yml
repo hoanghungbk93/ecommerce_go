@@ -1,0 +1,408 @@
+---
+Description: Deploy a service into an ECS cluster behind a public load balancer.
+Parameters:
+  EnvironmentName:
+    Type: String
+    Description: The name of the environment to add this service to
+
+  SubEnvironmentName:
+    Type: String
+    Description: >-
+      Super magic parameter for leeloo. Don't touch!
+    Default: ""
+
+  VerticalName:
+    Description: >-
+      The name of the vertical that owns the service. The vertical name is
+      required to be lowercase as it is used in the naming convention of
+      resources created by this template and by resources on which this template
+      depends.
+    Type: String
+
+  ServiceName:
+    Type: String
+    Description: >-
+      A name for the service; interchangeable with project name.
+
+  ImageUrl:
+    Type: String
+    Description: >-
+      The url of a docker image that contains the application process that will
+      handle the traffic for this service
+
+  ContainerPort:
+    Type: Number
+    Default: 80
+    Description: >-
+      What port number the application inside the docker container is binding to
+
+  CPU:
+    Type: Number
+    Default: 256
+    Description: How much CPU to give the container. 1024 is 1 CPU
+
+  Memory:
+    Type: Number
+    Default: 512
+    Description: How much memory in megabytes to give the container
+
+  MemoryReservation:
+    Type: Number
+    Description: The soft limit (in MiB) of memory to reserve for the container.
+    Default: 0
+    MinValue: 0
+
+  DesiredCount:
+    Type: Number
+    Default: 2
+    Description: How many copies of the service task to run
+
+  Role:
+    Type: String
+    Default: ""
+    Description: >-
+      (Optional) An IAM role to give the service's containers if the code
+      within needs to access other AWS resources like S3 buckets, DynamoDB
+      tables, etc
+
+  LogGroupName:
+    Type: String
+
+  ClusterName:
+    Description: >-
+      The name of the cluster that the service should run on.
+    Type: String
+
+  HealthCheckPath:
+    Description: The route to the health check endpoint.
+    Type: String
+    Default: /healthcheck
+
+  MinCapacity:
+    Description: >-
+      The minimum number of tasks that can be running in the service.
+      There should always be at least 2 tasks in production for redundancy.
+    Type: Number
+    Default: 2
+
+  MaxCapacity:
+    Description: >-
+      The maximum number of tasks that can be running in the service.
+    Type: Number
+    Default: 10
+
+  HealthyThresholdCount:
+    Type: Number
+    MinValue: 1
+    Default: 2
+
+  UnhealthyThresholdCount:
+    Type: Number
+    MinValue: 1
+    Default: 2
+
+  HealthCheckTimeoutSeconds:
+    Type: Number
+    MinValue: 1
+    Default: 5
+
+  HealthCheckIntervalSeconds:
+    Type: Number
+    MinValue: 1
+    Default: 6
+
+  MinimumHealthyPercent:
+    Type: Number
+    Default: 50
+    MinValue: 50
+
+  MaximumPercent:
+    Type: Number
+    Default: 200
+    MinValue: 100
+
+  LoadBalancerName:
+    Type: String
+    Default: ''
+    Description: >-
+      The name of the load balancer that this service should be served under.
+      Leaving thing blank will assume the load balancer is the same as the
+      ServiceName parameter.
+
+  ListenerArn:
+    Type: String
+    Description: >-
+      The ARN for the HTTP listener. Setting this overrides the default listener
+      ARN.
+    Default: ''
+
+  TaskDefinitionArn:
+    Description: >-
+      Rather than making a Task Definition in this template, allow the parent
+      stack to create one and pass it in. This allows easier customization of
+      attributes that are arrays or dictionaries without exploding parameters
+      on this template. If you provide a TaskDefinition make sure you also
+      define a CloudWatchLogGroup in the parent stack.
+    Type: String
+    Default: ''
+
+  WorkingDirectory:
+    Type: String
+    Default: ''
+
+  UseCustomNamedService:
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  JsonLogMaxSize:
+    Description: >-
+      Only used when LogGroupName==""
+      The maximum size of the log before it is rolled.
+      A positive integer plus a modifier representing the unit of measure (k, m, or g).
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "10m"
+    AllowedPattern: "\\A[1-9]\\d*[kmg]\\z"
+
+  JsonLogMaxFile:
+    Description: >-
+      Only used when LogGroupName==""
+      The maximum number of log files that can be present.
+      If rolling the logs creates excess files, the oldest file is removed.
+      Only effective when max-size is also set. A positive integer.
+      See https://docs.docker.com/config/containers/logging/json-file/
+    Type: String
+    Default: "3"
+    AllowedPattern: "\\A[1-9]\\d*\\z"
+
+Conditions:
+  HasDefaultRole: !Equals [!Ref Role, '']
+  HasCustomRole: !Not [!Equals [!Ref Role, '']]
+  HasMemoryReservation: !Not [!Equals [!Ref MemoryReservation, 0]]
+  HasDesiredCount: !Not [!Equals [!Ref DesiredCount, -1]]
+  HasListenerArn: !Not [!Equals [!Ref ListenerArn, '']]
+  HasLoadBalancerName: !Not [!Equals [!Ref LoadBalancerName, '']]
+
+  UseLoadBalancer: !Or
+    - !Condition HasLoadBalancerName
+    - !Condition HasListenerArn
+
+  UseLoadBalancerAndHasNoSubEnvironment: !And
+    - !Condition UseLoadBalancer
+    - !Equals [!Ref SubEnvironmentName, ""]
+
+  NoExternalTaskDefinitionArn: !Equals [!Ref TaskDefinitionArn, ""]
+
+  HasWorkingDirectory: !Not [!Equals [!Ref WorkingDirectory, ""]]
+
+  HasCustomNamedService: !Equals [!Ref UseCustomNamedService, true]
+
+  HasLogGroupName: !Not [!Equals [!Ref LogGroupName, ""]]
+
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+
+  # The task definition. This is a simple metadata description of what
+  # container to run, and what resource requirements it has.
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: NoExternalTaskDefinitionArn
+    Properties:
+      Family: !Sub ${Namespace}-${ServiceName}
+      Cpu: !Ref CPU
+      Memory: !Ref Memory
+      TaskRoleArn:
+        Fn::If:
+          - HasCustomRole
+          - !Ref Role
+          - !Ref DefaultRole
+      ContainerDefinitions:
+        - Name: !Ref ServiceName
+          WorkingDirectory: !If
+            - HasWorkingDirectory
+            - !Ref WorkingDirectory
+            - !Ref 'AWS::NoValue'
+          Cpu: !Ref CPU
+          Memory: !Ref Memory
+          MemoryReservation: !If
+            - HasMemoryReservation
+            - !Ref MemoryReservation
+            - !Ref 'AWS::NoValue'
+          Image: !Ref ImageUrl
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration: !If
+            - HasLogGroupName
+            - LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroupName
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: !Ref ServiceName
+            - LogDriver: json-file
+              Options:
+                max-size: !Ref JsonLogMaxSize
+                max-file: !Ref JsonLogMaxFile
+          Ulimits:
+            - Name: nofile
+              HardLimit: 1024000
+              SoftLimit: 1024000
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: ENV
+              Value: !Ref Namespace # important!
+            - Name: AWS_DEFAULT_REGION
+              Value: !Ref AWS::Region
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+
+  # The service. The service is a resource which allows you to run multiple
+  # copies of a type of task, and gather up their logs and metrics, as well
+  # as monitor the number of running tasks and replace any that have crashed
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !If
+        - HasCustomNamedService
+        - !Sub ${Namespace}-${ServiceName}
+        - !Ref AWS::NoValue
+      Cluster: !Ref ClusterName
+      DeploymentConfiguration:
+        MaximumPercent: !Ref MaximumPercent
+        MinimumHealthyPercent: !Ref MinimumHealthyPercent
+      DesiredCount: !If
+        - HasDesiredCount
+        - !Ref DesiredCount
+        - !Ref AWS::NoValue
+      TaskDefinition: !If
+        - NoExternalTaskDefinitionArn
+        - !Ref TaskDefinition
+        - !Ref TaskDefinitionArn
+      LoadBalancers:
+        - !If
+          - UseLoadBalancer
+          - ContainerName: !Ref ServiceName
+            ContainerPort: !Ref ContainerPort
+            TargetGroupArn: !GetAtt ListenerRule.Outputs.TargetGroupArn  # <- dependency fix...
+          - !Ref AWS::NoValue
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+        - Type: spread
+          Field: instanceId
+
+  # A target group. This is used for keeping track of all the tasks, and
+  # what IP addresses / port numbers they have. You can query it yourself,
+  # to use the addresses yourself, but most often this target group is just
+  # connected to an application load balancer, or network load balancer, so
+  # it can automatically distribute traffic across all the targets.
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: UseLoadBalancer
+    Properties:
+      TargetType: instance
+      HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref HealthyThresholdCount
+      # Name: !Sub ${EnvironmentName}-${ServiceName}
+      Port: !Ref ContainerPort
+      Protocol: HTTP
+      UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      Matcher:
+        HttpCode: 200-299
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '20'
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+
+  ServiceAutoscaling:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: Service
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/ecs/v2/components/service-autoscaling.yml
+      Parameters:
+        ServiceName: !GetAtt Service.Name
+        ClusterName: !Ref ClusterName
+        MinCapacity: !Ref MinCapacity
+        MaxCapacity: !Ref MaxCapacity
+
+  DefaultRole:
+    Type: AWS::IAM::Role
+    Condition: HasDefaultRole
+    Properties:
+      RoleName: !Sub ${Namespace}-${ServiceName}-default-ecs-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+
+  ServicePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub ${Namespace}-${ServiceName}-policy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub >-
+                  ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !If [HasDefaultRole, !Ref DefaultRole, !Ref Role]
+
+  ListenerRule:
+    Type: AWS::CloudFormation::Stack
+    Condition: UseLoadBalancer
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/load-balancers/v2/components/listener-rule.yml
+      Parameters:
+        TargetGroupArn: !Ref TargetGroup
+        LoadBalancerName: !Ref LoadBalancerName
+        ListenerArn: !Ref ListenerArn
+        EnvironmentName: !Ref EnvironmentName
+
+Outputs:
+
+  TargetGroupArn:
+    Condition: UseLoadBalancerAndHasNoSubEnvironment
+    Description: The ARN of the target group for this service
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}:service:v2:${ServiceName}:target-group
+      # Name: !Sub ${EnvironmentName}:ecs/service:v2:${ServiceName}:target-group
+
+# vim: set ft=yaml.cloudformation :

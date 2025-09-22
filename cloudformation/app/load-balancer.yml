@@ -1,0 +1,835 @@
+Description: Creates an application load balancer.
+
+# TODO: remove the ability to parameterize access log bucket? the WAF CFN template overrides any existing notification rules
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the load balancer. The vertical name is
+      required to be lowercase as it is used in the naming convention of resources
+      created by this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  LoadBalancerName:
+    Description: The name of the load balancer.
+    Type: String
+
+  Scheme:
+    Description: The scheme of the ALB.
+    Type: String
+    AllowedValues:
+      - internal
+      - internet-facing
+    Default: internal
+
+  HealthCheckPath:
+    Description: The route to the health check endpoint.
+    Type: String
+    Default: /healthcheck
+
+  CreateDNS:
+    Description: Whether or not a DNS alias should be created for the ALB.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  DNSName:
+    Description: >
+      The name of the alias created for the ALB. This parameter will be ignored if
+      CreateDNS is false. If not specified, the name of the load balancer is be used.
+    Type: String
+    Default: ""
+
+  ApplicationHttpPort:
+    Description: The HTTP port to listen to that will map to port 80.
+    Type: Number
+    Default: -1
+
+  AccessLoggingBucket:
+    Description: >
+      The s3 bucket name where ${EnvironmentName}-${LoadBalancerName} logs are saved.
+      Defaults to 'elb-logs-va' when ${EnvironmentName} is 'prod'
+      Ignored if FirewallBadResponseCodesMaxPerMinute is specified
+    Type: String
+    Default: ""
+
+  DomainName:
+    Description: >
+      The domain name of the route 53 record to be created for this load
+      balancer. Also used for SSL if this is a public domain.
+    Type: String
+
+  StrictFailureRateThreshold:
+    Description: >
+      Percentage threshold for the combined 4xx and 5xx errors. Exceeding this
+      value will trigger the strict failure rate alarm. Setting to zero disables
+      strict failure rate monitoring.
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 50
+
+  TypicalFailureRateThreshold:
+    Description: >
+      Percentage threshold for 5xx errors. Exceeding this value will trigger
+      the typical failure rate alarm. Setting this to zero disables typical
+      failure rate monitoring.
+    Type: Number
+    Default: 1
+    MinValue: 0
+    MaxValue: 50
+
+  LatencyMonitorPercentile:
+    Type: Number
+    Default: 99
+    MaxValue: 99.99
+    MinValue: 1
+
+  LatencyAlarmThreshold:
+    Type: Number
+    Description: >
+      The latency threshold in seconds at which the alarm should trigger.
+      Setting this to a non-zero value enables latency monitoring.
+    Default: 0
+    MinValue: 0
+
+  LatencyMonitorPercentile2:
+    Type: Number
+    Default: 50
+    MaxValue: 99.99
+    MinValue: 1
+
+  LatencyAlarmThreshold2:
+    Type: Number
+    Description: >
+      The latency threshold in seconds at which the alarm should trigger.
+      Setting this to a non-zero value enables latency monitoring.
+    Default: 0
+    MinValue: 0
+
+  LatencyEvaluationPeriods:
+    Description: >
+      The number of periods over which data is compared to the specified
+      latency threshold.
+    Type: Number
+    MinValue: 1
+    Default: 1
+
+  LatencyEvaluationPeriods2:
+    Description: >
+      The number of periods over which data is compared to the specified
+      latency threshold.
+    Type: Number
+    MinValue: 1
+    Default: 1
+
+  IdleTimeout:
+    Type: Number
+    Description: >
+      The time (in seconds) that a connection to the load balancer can remain
+      idle, which means no data is sent over the connection. After the specified
+      time, the load balancer closes the connection.
+    MinValue: 10
+    Default: 60
+
+  FirewallBadResponseCodesMaxPerMinute:
+    Type: Number
+    Description: >
+      The maximum number of bad requests per minute an origin IP can issue before they are considered abusive and blocked.
+      Does nothing if <= 0
+    MinValue: 0
+    Default: 0
+
+  FirewallBadResponseCodesRegex:
+    Type: String
+    Description: >
+      A python regular expression used to select access responses that indicate abusive behavior.
+      This string is used in python like: re.compile(string).match(example_http_code_str)
+      Unused unless FirewallBadResponseCodesMaxPerMinute > 0
+    Default: "(?:4..)" # 4xx responses indicate a bad client or bad client request
+
+  FirewallBadResponseCodesBlockSeconds:
+    Type: Number
+    Description: >
+      How long an abusive user is blocked.
+    Default: 14400 # 4 hours
+    MinValue: 300 # 5 minutes
+
+  AllowList:
+    Type: String
+    Description: >
+      A comma-delimited list of CIDRs to explicitly allow as ingress rules on the security group.
+      If not supplied, the default security group + rules will be used instead.
+    Default: ""
+
+  WebACLId:
+    Type: String
+    Description: >
+      Ignored when FirewallBadResponseCodesMaxPerMinute > 0
+    Default: ""
+
+  HostedZoneId:
+    Description: >
+      The HostedZoneId to be used for load balancer should the aws account hosted zones have repeated top level domain names. Most will not need to specify this attribute.
+    Type: String
+    Default: ''
+
+  FirewallVersion:
+    Description: >
+      This determines the major version to utilize for aws-waf-lambda.
+    Type: Number
+    Default: 1
+
+  WAFv2Ipv4AllowedCidrs:
+    Description: The IPv4 CIDRs to allow in the WAFv2 firewall
+    Type: CommaDelimitedList
+    Default: ""
+
+  WAFv2Ipv6AllowedCidrs:
+    Description: The IPv6 CIDRs to allow in the WAFv2 firewall
+    Type: CommaDelimitedList
+    Default: ""
+
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - E7001
+
+Mappings:
+  CertArnByDomain:
+    "Fn::Transform":
+      Name: "AWS::Include"
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+  # last updated: 2018-11-09
+  # https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-access-logs.html
+  ELBLogAccountByRegion:
+    ap-southeast-1:
+      AccountId: "127311923021"
+    us-east-2:
+      AccountId: "033677994240"
+    us-west-1:
+      AccountId: "027434742980"
+    us-west-2:
+      AccountId: "797873946194"
+    ca-central-1:
+      AccountId: "985666609251"
+    eu-central-1:
+      AccountId: "054676820928"
+    eu-west-1:
+      AccountId: "156460612806"
+    eu-west-2:
+      AccountId: "652711504416"
+    eu-west-3:
+      AccountId: "009996457667"
+    ap-northeast-1:
+      AccountId: "582318560864"
+    ap-northeast-2:
+      AccountId: "600734575887"
+    ap-northeast-3:
+      AccountId: "383597477331"
+    ap-southeast-1:
+      AccountId: "114774131450"
+    ap-southeast-2:
+      AccountId: "783225319266"
+    ap-south-1:
+      AccountId: "718504428378"
+    sa-east-1:
+      AccountId: "507241528517"
+    us-gov-west-1:
+      AccountId: "048591011584"
+    cn-north-1:
+      AccountId: "638102146993"
+    cn-northwest-1:
+      AccountId: "037604701340"
+
+Conditions:
+  IsPrivate: !Equals [!Ref Scheme, internal]
+  IsPublic: !Equals [!Ref Scheme, internet-facing]
+  HasPrivateDNS: !And [!Condition IsPrivate, !Equals [!Ref CreateDNS, true]]
+  HasPublicDNS: !And [!Condition IsPublic, !Equals [!Ref CreateDNS, true]]
+  HasCustomDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  HasApplicationHttpPort: !Not [!Equals [!Ref ApplicationHttpPort, -1]]
+  HasAccessLoggingBucket: !Not [!Equals [!Ref AccessLoggingBucket, ""]]
+  CreateFirewall: !And
+    - !Condition IsPublic
+    - !Not [!Equals [!Ref FirewallBadResponseCodesMaxPerMinute, 0]]
+  IsFirewallVersion1: !Equals [!Ref FirewallVersion, 1]
+  CreateLoggingBucket: !And
+    - !Condition CreateFirewall
+    - !Not [!Condition HasAccessLoggingBucket]
+  IsAccessLoggingEnabled:
+    !Or [
+      !Condition CreateFirewall,
+      !Condition HasAccessLoggingBucket,
+      !Equals [!Ref EnvironmentName, "prod"],
+    ]
+  IsLatencyMonitorEnabled: !Not [!Equals [!Ref LatencyAlarmThreshold, 0]]
+  IsLatencyMonitor2Enabled: !Not [!Equals [!Ref LatencyAlarmThreshold2, 0]]
+  IsFailureRateMonitoringEnabled: !Or
+    - !Not [!Equals [!Ref StrictFailureRateThreshold, 0]]
+    - !Not [!Equals [!Ref TypicalFailureRateThreshold, 0]]
+  IsStrictFailureRateMonitoringEnabled:
+    !Not [!Equals [!Ref StrictFailureRateThreshold, 0]]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  CreateWhitelistedSecGroup: !Not [!Equals [!Ref AllowList, ""]]
+  CreateDefaultSecGroup: !And
+    - !Condition IsPublic
+    - !Not [!Condition CreateWhitelistedSecGroup]
+  HasWebACLId: !And [!Not [!Condition CreateFirewall], !Not [!Equals [!Ref WebACLId, '']]]
+  EnableUsaEmbargoWebACL: !And
+    - !Condition IsPublic
+    - !Not [!Condition CreateFirewall]
+    - !Not [!Condition HasWebACLId]
+  HasHostedZoneID: !Not [!Equals [!Ref HostedZoneId, '']]
+
+Resources:
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  # Default case for public ALBs without explicitly-defined CIDRs to whitelist
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateDefaultSecGroup
+    Properties:
+      GroupDescription: !Sub Provides public access over 80/443 to the ${EnvironmentName}-${LoadBalancerName} load balancer.
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+
+  # Special use case for public ALBs with explicitly-defined CIDRs to whitelist
+  # The custom resource ( cfn-secgroup-resource ) will also create the required
+  # ingress rules for each CIDR and automatically attach them to the sec group.
+  # The ingress rules defined in this template will be skipped based per Condition.
+  # Returns the GroupId of the created SecurityGroup which can be accessed with !GetAtt
+  CustomSecurityGroup:
+    Type: Custom::SecGroup
+    Condition: CreateWhitelistedSecGroup
+    Properties:
+      ServiceToken: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-secgroup-resource
+      Namespace: !Ref Namespace
+      Project: !Ref LoadBalancerName
+      VpcID:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      CIDRs: !Ref AllowList
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: IsPublic
+    Properties:
+      ToPort: 65535
+      FromPort: 0
+      CidrIp: 0.0.0.0/0
+      GroupId: !If
+        - CreateDefaultSecGroup
+        - !Ref LoadBalancerSecurityGroup
+        - !GetAtt CustomSecurityGroup.GroupId
+      IpProtocol: -1
+
+  SecurityGroupIngressHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateDefaultSecGroup
+    Properties:
+      ToPort: 80
+      FromPort: 80
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+
+  SecurityGroupIngressHTTPS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: CreateDefaultSecGroup
+    Properties:
+      ToPort: 443
+      FromPort: 443
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateLoggingBucket
+    DeletionPolicy: Retain
+    Properties:
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Status: Enabled
+            ExpirationInDays: "365"
+            Prefix: !Sub ${Namespace}-${LoadBalancerName}/logs/
+            Transitions:
+              - TransitionInDays: "90"
+                StorageClass: Glacier
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${LoadBalancerName}-logs
+        - Key: LoggingEnabled
+          Value: !If [CreateLoggingBucket, "true", "false"]
+
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateLoggingBucket
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}
+              - !Sub arn:aws:s3:::${LoggingBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - Effect: Allow
+            Action:
+              - s3:Put*
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}/${Namespace}-${LoadBalancerName}/*
+            Principal:
+              AWS:
+                - !FindInMap [
+                    ELBLogAccountByRegion,
+                    !Ref "AWS::Region",
+                    AccountId,
+                  ]
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}
+      Scheme: !Ref Scheme
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+      SecurityGroups:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+        - !If
+          - IsPublic
+          - !If
+            - CreateWhitelistedSecGroup
+            - !GetAtt CustomSecurityGroup.GroupId
+            - !Ref LoadBalancerSecurityGroup
+          - !Ref AWS::NoValue
+
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref IdleTimeout
+        - Key: access_logs.s3.enabled
+          Value: !If
+            - IsAccessLoggingEnabled
+            - "true"
+            - "false"
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.bucket
+            Value: !If
+              - CreateLoggingBucket
+              - !Ref LoggingBucket
+              - !If [
+                  HasAccessLoggingBucket,
+                  !Ref AccessLoggingBucket,
+                  "adela-elb-logs",
+                ]
+          - !Ref AWS::NoValue
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.prefix
+            Value: !Sub ${Namespace}-${LoadBalancerName}/logs
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: LoggingBucket
+            Value: !If
+              - CreateLoggingBucket
+              - !Ref LoggingBucket
+              - !If [
+                  HasAccessLoggingBucket,
+                  !Ref AccessLoggingBucket,
+                  "adela-elb-logs",
+                ]
+          - !Ref AWS::NoValue
+        - !If
+          - CreateLoggingBucket
+          - Key: LoggingBucketPolicy
+            Value: !Ref LoggingBucketPolicy # note AWS::S3::BucketPolicy technically has no !Ref behavior defined in the docs, but it does return a physical resource id; Ref support case 10640642351 on dev-ltk aws account
+          - !Ref AWS::NoValue
+
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${Namespace}-${LoadBalancerName}
+      Port: 80
+      Protocol: HTTP
+      HealthCheckIntervalSeconds: 300
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 4
+      UnhealthyThresholdCount: 3
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      Matcher:
+        HttpCode: 200
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 20
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+
+  ListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      LoadBalancerArn: !Ref LoadBalancer
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  ListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsPublic
+    Properties:
+      Port: 443
+      Protocol: HTTPS
+      LoadBalancerArn: !Ref LoadBalancer
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+      Certificates:
+        - CertificateArn: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+
+  ListenerApplicationHTTP:
+    Condition: HasApplicationHttpPort
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Port: !Ref ApplicationHttpPort
+      Protocol: HTTP
+      LoadBalancerArn: !Ref LoadBalancer
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  PublicRecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPublicDNS
+    Properties:
+      Comment: !Sub DNS for external communication to the ${LoadBalancer.LoadBalancerName} ALB.
+      HostedZoneName: !Join
+        - ""
+        - - !Ref DomainName
+          - .
+      Name: !Join
+        - ""
+        - - !If [
+              HasCustomDNSName,
+              !Join ["-", [!Ref Namespace, !Ref DNSName]],
+              !GetAtt LoadBalancer.LoadBalancerName,
+            ]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      SetIdentifier: !Ref AWS::StackName
+      Weight: 0
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: true
+
+  PrivateRecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPrivateDNS
+    Properties:
+      Comment: !Sub DNS for internal communication to the ${LoadBalancer.LoadBalancerName} ALB.
+      HostedZoneName: !If
+        - HasHostedZoneID
+        - !Ref AWS::NoValue
+        - !Sub ${DomainName}.
+      HostedZoneId: !If
+        - HasHostedZoneID
+        - !Ref HostedZoneId
+        - !Ref AWS::NoValue
+      Name: !Join
+        - ""
+        - - !If [
+              HasCustomDNSName,
+              !Join ["-", [!Ref Namespace, !Ref DNSName]],
+              !GetAtt LoadBalancer.LoadBalancerName,
+            ]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      SetIdentifier: !Ref AWS::StackName
+      Weight: 0
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+        EvaluateTargetHealth: true
+
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Condition: IsPrivate
+    Properties:
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: "60"
+        RoutingPolicy: WEIGHTED
+      Name: !Join
+        - "-"
+        - - !If [HasSubEnvironment, !Ref SubEnvironmentName, !Ref AWS::NoValue]
+          - !Sub ${LoadBalancerName}.elb
+      NamespaceId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:service-discovery:private-dns-namespace:env:id
+
+  ServiceDiscoveryInstance:
+    Type: AWS::ServiceDiscovery::Instance
+    Condition: IsPrivate
+    Properties:
+      InstanceAttributes:
+        AWS_ALIAS_DNS_NAME: !GetAtt LoadBalancer.DNSName
+      ServiceId: !Ref ServiceDiscoveryService
+
+  PublicDNSParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasPublicDNS
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref PublicRecordSet
+
+  PrivateDNSParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasPrivateDNS
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref PrivateRecordSet
+
+  LatencyMonitor:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsLatencyMonitorEnabled
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/alarms/latency.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+        LoadBalancerType: ALB
+        Percentile: !Ref LatencyMonitorPercentile
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        AlarmTarget: !Ref AlarmTarget
+        LatencyThreshold: !Ref LatencyAlarmThreshold
+        EvaluationPeriods: !Ref LatencyEvaluationPeriods
+
+  LatencyMonitor2:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsLatencyMonitor2Enabled
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/alarms/latency.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+        LoadBalancerType: ALB
+        Percentile: !Ref LatencyMonitorPercentile2
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        AlarmTarget: !Ref AlarmTarget
+        LatencyThreshold: !Ref LatencyAlarmThreshold2
+        EvaluationPeriods: !Ref LatencyEvaluationPeriods2
+
+  FailureRateMonitor:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsFailureRateMonitoringEnabled
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/alarms/failure-rate.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+        LoadBalancerType: ALB
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        AlarmTarget: !Ref AlarmTarget
+        TypicalFailureRateThreshold: !Ref TypicalFailureRateThreshold
+        StrictFailureRateThreshold: !If
+          - IsStrictFailureRateMonitoringEnabled
+          - !Ref StrictFailureRateThreshold
+          - !Ref AWS::NoValue
+        DisableStrictFailureRateAlarm:
+          !If [IsStrictFailureRateMonitoringEnabled, false, true]
+
+  Firewall:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !If
+        - IsFirewallVersion1
+        - !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/load-balancers/addons/firewall/basic.yml
+        - !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/load-balancers/addons/firewall/basicv2.yml
+      Parameters:
+        Namespace: !Ref Namespace
+        LoadBalancerArn: !Ref LoadBalancer
+        LoadBalancerName: !Sub ${LoadBalancerName}
+        Ipv4AllowedCidrs: !If [IsFirewallVersion1, !Ref AWS::NoValue, !Join [",", !Ref WAFv2Ipv4AllowedCidrs] ]
+        Ipv6AllowedCidrs: !If [IsFirewallVersion1, !Ref AWS::NoValue, !Join [",", !Ref WAFv2Ipv6AllowedCidrs] ]
+
+  FirewallTrafficFilter:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !If
+        - IsFirewallVersion1
+        - !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/load-balancers/addons/firewall-lambdas/httpcodes.yml
+        - !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/load-balancers/addons/firewall-lambdas/httpcodesv2.yml
+      Parameters: !If
+        - IsFirewallVersion1
+        - EnvironmentName: !Ref EnvironmentName
+          LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+          FunctionName: !Sub ${Namespace}-${LoadBalancerName}-waf-auto-httpcode
+          ManualBlockIPSet: !GetAtt Firewall.Outputs.ManualBlockIPSet
+          AutoBlockIPSet: !GetAtt Firewall.Outputs.AutoBlockIPSet
+          AccessLogBucket: !Ref LoggingBucket
+          AccessLogKeyPrefix: !Sub ${Namespace}-${LoadBalancerName}/
+          BlockSeconds: !Ref FirewallBadResponseCodesBlockSeconds
+          BadResponseCodesRegex: !Ref FirewallBadResponseCodesRegex
+          BadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+        - EnvironmentName: !Ref EnvironmentName
+          LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+          FunctionName: !Sub ${Namespace}-${LoadBalancerName}-waf-auto-httpcode
+          ManualAllowIPSetIpv4Arn: !GetAtt Firewall.Outputs.ManualAllowIPv4SetArn
+          ManualAllowIPSetIpv6Arn: !GetAtt Firewall.Outputs.ManualAllowIPv6SetArn
+          ManualBlockIPSetIpv4Arn: !GetAtt Firewall.Outputs.ManualBlockIPv4SetArn
+          AutoBlockIPSetIpv4Arn: !GetAtt Firewall.Outputs.AutoBlockIPv4SetArn
+          ManualBlockIPSetIpv6Arn: !GetAtt Firewall.Outputs.ManualBlockIPv6SetArn
+          AutoBlockIPSetIpv6Arn: !GetAtt Firewall.Outputs.AutoBlockIPv6SetArn
+          ManualBlockIPSetIpv4: !GetAtt Firewall.Outputs.ManualBlockIPv4Set
+          AutoBlockIPSetIpv4: !GetAtt Firewall.Outputs.AutoBlockIPv4Set
+          ManualBlockIPSetIpv6: !GetAtt Firewall.Outputs.ManualBlockIPv6Set
+          AutoBlockIPSetIpv6: !GetAtt Firewall.Outputs.AutoBlockIPv6Set
+          ManualAllowIPSetIpv4: !GetAtt Firewall.Outputs.ManualAllowIPv4Set
+          ManualAllowIPSetIpv6: !GetAtt Firewall.Outputs.ManualAllowIPv6Set
+          AccessLogBucket: !Ref LoggingBucket
+          AccessLogKeyPrefix: !Sub ${Namespace}-${LoadBalancerName}/
+          BlockSeconds: !Ref FirewallBadResponseCodesBlockSeconds
+          BadResponseCodesRegex: !Ref FirewallBadResponseCodesRegex
+          BadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+
+  # UsaEmbargoWafV2WebAcl:
+  #   Type: AWS::WAFv2::WebACLAssociation
+  #   Condition: EnableUsaEmbargoWebACL
+  #   Properties:
+  #     ResourceArn: !Ref LoadBalancer
+  #     WebACLArn: !ImportValue WafV2RegionalWebAclUsaEmbargoArn
+
+Outputs:
+  LoadBalancerCanonicalHostedZoneID:
+    Description: Canonical hosted zone id
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+
+  LoadBalancerDNSName:
+    Description: load balancer dns name
+    Value: !GetAtt LoadBalancer.DNSName
+
+  LoadBalancerFullName:
+    Description: load balancer full name
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+  LoadBalancerARN:
+    Description: The ARN of the ALB.
+    Value: !Ref LoadBalancer
+
+  LoadBalancerHost:
+    Description: The hostname of the ALB.
+    Value: !If
+      - HasPublicDNS
+      - !Ref PublicRecordSet
+      - !If
+        - HasPrivateDNS
+        - !Ref PrivateRecordSet
+        - !GetAtt LoadBalancer.DNSName
+
+  ListenerHTTPS:
+    Condition: IsPublic
+    Description: The Arn of the loadbalancer's HTTPS listener.
+    Value: !Ref ListenerHTTPS
+
+  TargetGroup:
+    Description: The ARN of the target group attached to the ALB.
+    Value: !Ref TargetGroup

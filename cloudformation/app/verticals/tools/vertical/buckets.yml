@@ -1,0 +1,37 @@
+Description: Creates S3 buckets needed for influencer tools.
+
+Resources:
+
+  LambdaArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: prod-influencer-tools-lambdas-west.rewardstyle.com
+      Tags:
+        - Key: Vertical
+          Value: tools
+
+  ToolsLambdaArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LambdaArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Sid: Allow access from influencer tools dev account.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::406233834736:root
+            Action:
+              - s3:GetObject
+              - s3:GetObjectAcl
+              - s3:GetObjectTagging
+            Resource: !Sub ${LambdaArtifactsBucket.Arn}/*
+          - Sid: Allow access for circle artificer.
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/circle-artificer
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+            Resource: !Sub ${LambdaArtifactsBucket.Arn}/*

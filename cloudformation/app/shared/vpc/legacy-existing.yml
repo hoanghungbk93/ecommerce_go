@@ -1,0 +1,71 @@
+Description: Exports values of pre-existing VPC resources using legacy format.
+
+Parameters:
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [qa, prod]
+
+  PrivateSubnets:
+    Description: Existing private subnets
+    Type: CommaDelimitedList
+
+  PublicSubnets:
+    Description: Existing private subnets
+    Type: CommaDelimitedList
+
+  VpcId:
+    Type: String
+    Description: VPC ID of existing VPC
+    AllowedPattern: "^vpc-[a-f0-9]+"
+
+  DefaultSecurityGroup:
+    Type: String
+    Description: Default security group of existing VPC
+    AllowedPattern: "^sg-[a-f0-9]+"
+
+Resources:
+
+  Dummy:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub ${EnvironmentName}-${VerticalName}-external-vpc-parameters-dummy
+      Description: Dummy resource for a CloudFormation stack that exports values of pre-existing VPC resources.
+      Value: Don't delete this!
+
+Outputs:
+
+  VpcId:
+    Description: Unique identifier of the VPC.
+    Value: !Ref VpcId
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-vpc-id
+
+  PublicSubnets:
+    Description: A list of the public subnets in the VPC.
+    Value: !Join
+      - ","
+      - !Ref PublicSubnets
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-vpc-public-subnets
+
+  PrivateSubnets:
+    Description: A list of the private subnets in the VPC.
+    Value: !Join
+      - ","
+      - !Ref PrivateSubnets
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-vpc-private-subnets
+
+  DefaultSecurityGroup:
+    Description: The default security group in the VPC.
+    Value: !Ref DefaultSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-vpc-default-security-group

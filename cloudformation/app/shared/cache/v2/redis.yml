@@ -1,0 +1,808 @@
+Description: Creates a Redis cluster with cluster (sharded) mode disabled.
+
+# For continued readin on how REDIS managed memory, see: https://redis.io/topics/lru-cache
+# For more information on what configuration options AWS supports, see: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/ParameterGroups.Redis.html#ParameterGroups.Redis.NodeSpecific
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, staging, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the cluster. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  ClusterName:
+    Description: The name of the cluster.
+    Type: String
+
+  ClusterDescription:
+    Description: The description of the cluster.
+    Type: String
+
+  EngineVersion:
+    Description: The version of the Redis engine to use.
+    Type: String
+    Default: 5.0.4
+
+  NodeType:
+    Description: The compute and memory capacity of the nodes in the cluster.
+    Type: String
+
+  NumNodes:
+    Type: Number
+    Description: The number of nodes in the cluster (1 primary, multiple read replicas).
+    MinValue: 1
+    Default: 1
+    MaxValue: 2
+    AllowedValues: [1, 2]
+
+  AutomaticFailoverEnabled:
+    Type: String
+    Description: Whether or not to enable automatic failover (requires NumNodes > 1, EngineVersion >= 2.8.6, and NodeType > T2).
+    AllowedValues: [true, false]
+    Default: false
+
+  AutoMinorVersionUpgrade:
+    Description: Whether or not minor engine upgrades can be applied automatically to the nodes in the cluster.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  SnapshotName:
+    Description: The name of a snapshot from which to restore data into the cluster.
+    Type: String
+    Default: ""
+
+  CPUHighThreshold:
+    Description: >
+      The threshold at which the redis cluster's EngineCPUUtilization triggers an alarm (percent).
+      If 0, no alarm is created.
+    Type: Number
+    Default: 90
+    MinValue: 0
+    MaxValue: 100
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the CacheCluster's CPU is sampled.
+    Type: Number
+    Default: 300
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 1
+
+  CPUHighUrgency:
+    Description: The urgency to use on high CPU alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  EvictionsHighThreshold:
+    Description: >
+      The threshold at which the cluster's eviction count should raise an alarm
+      If 0, no alarm is created.
+    Type: Number
+    Default: 1
+
+  EvictionsHighPeriod:
+    Description: The number of seconds over which the cluster's eviction count is sampled.
+    Type: Number
+    Default: 300
+
+  EvictionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high eviction count threshold.
+    Type: Number
+    Default: 1
+
+  EvictionsHighUrgency:
+    Description: The urgency to use on high eviction count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  # As of 2019-06-25 the default connection limit is 65000
+  # Ref: https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/ParameterGroups.Redis.html
+
+  ConnectionsHighThreshold:
+    Description: >
+      The threshold at which the cluster's connection count should raise an alarm
+      As of 2019-06-25 the default connection limit is 65000.
+      If 0, no alarm is created.
+    Type: Number
+    Default: 32500
+
+  ConnectionsHighPeriod:
+    Description: The number of seconds over which the cluster's connection count is sampled.
+    Type: Number
+    Default: 300
+
+  ConnectionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high connection count threshold.
+    Type: Number
+    Default: 1
+
+  ConnectionsHighUrgency:
+    Description: The urgency to use on high connection count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  NewConnectionsHighThreshold:
+    Description: |
+      The threshold at which the cluster's new-connection count should raise an alarm
+      If 0, no alarm is created.
+    Type: Number
+    Default: 10000
+
+  NewConnectionsHighPeriod:
+    Description: The number of seconds over which the cluster's new-connection count is sampled.
+    Type: Number
+    Default: 300
+
+  NewConnectionsHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high new-connection count threshold.
+    Type: Number
+    Default: 1
+
+  NewConnectionsHighUrgency:
+    Description: The urgency to use on high new connection count alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  MemoryUsageHighThreshold:
+    Description: |
+      The threshold at which the cluster's used memory should raise an alarm
+      If 0, no alarm is created.
+    Type: Number
+    Default: 80
+
+  MemoryUsageHighPeriod:
+    Description: The number of seconds over which the cluster's memory usage is sampled.
+    Type: Number
+    Default: 300
+
+  MemoryUsageHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high memory usage threshold.
+    Type: Number
+    Default: 1
+
+  MemoryUsageHighUrgency:
+    Description: The urgency to use on memory usage high alarms.
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  ParameterGroup:
+    Description: >
+      The redis parameter group name. If one is not supplied then one will be created.
+      As of 2019-07-02 AWS does not support updating a parameter group's properties, a new resource must instead be created each time a parameter value needs to be altered.
+      See https://forums.aws.amazon.com/thread.jspa?threadID=218268
+    Type: String
+    Default: ""
+
+  AlarmHintReservedMemoryPercent:
+    Description: >
+      This value is only used in the creation of alarms and only if using an external Parameter Group.
+      Should match the reserved-memory-percent value of the provided redis parameter group.
+    Type: Number
+    Default: 25
+    MinValue: 0
+    MaxValue: 100
+
+Mappings:
+  # Note that redis parameter groups are immutable
+  # you cannot modify these "EngineVersions" values once a row in this map has been created
+  # and infrastructure in prod exists using that value
+  #
+  # If for some reason you do need to change a value in this map, change the "logical resource name"
+  # of the DefaultParameterGroup resource to something like DefaultParameterGroupV2
+  #
+  # That will force the creation of a new parameter group with updated values.
+
+  EngineVersions:
+    "7.0":
+      ParameterGroupFamily: redis7
+      ReservedMemoryPercent: 25
+    "6.x":
+      ParameterGroupFamily: redis6.x
+      ReservedMemoryPercent: 25
+    "5.0.4":
+      ParameterGroupFamily: redis5.0
+      ReservedMemoryPercent: 25
+    "5.0.3":
+      ParameterGroupFamily: redis5.0
+      ReservedMemoryPercent: 25
+    "5.0.0":
+      ParameterGroupFamily: redis5.0
+      ReservedMemoryPercent: 25
+    "4.0.10":
+      ParameterGroupFamily: redis4.0
+      ReservedMemoryPercent: 25
+    "3.2.10":
+      ParameterGroupFamily: redis3.2
+      ReservedMemoryPercent: 25
+    "3.2.6":
+      ParameterGroupFamily: redis3.2
+      ReservedMemoryPercent: 25
+    "3.2.4":
+      ParameterGroupFamily: redis3.2
+      ReservedMemoryPercent: 25
+
+  # last updated 2021-11-10 from https://docs.aws.amazon.com/AmazonElastiCache/latest/red-ug/ParameterGroups.Redis.html#ParameterGroups.Redis.NodeSpecific
+  # added m6g and r6g mappings from same location (2021-10-08);  added t3 mappings from same location (2021-11-10)
+
+  NodeTypes:
+    cache.t1.micro:
+      MaxMemoryBytes: 142606336
+    cache.t2.micro:
+      MaxMemoryBytes: 581959680
+    cache.t2.small:
+      MaxMemoryBytes: 1665138688
+    cache.t2.medium:
+      MaxMemoryBytes: 3461349376
+    cache.t3.micro:
+      MaxMemoryBytes: 536870912
+    cache.t3.small:
+      MaxMemoryBytes: 1471026299
+    cache.t3.medium:
+      MaxMemoryBytes: 3317862236
+    cache.m1.small:
+      MaxMemoryBytes: 943718400
+    cache.m1.medium:
+      MaxMemoryBytes: 3093299200
+    cache.m1.large:
+      MaxMemoryBytes: 7025459200
+    cache.m1.xlarge:
+      MaxMemoryBytes: 14889779200
+    cache.m2.xlarge:
+      MaxMemoryBytes: 17091788800
+    cache.m2.2xlarge:
+      MaxMemoryBytes: 35022438400
+    cache.m2.4xlarge:
+      MaxMemoryBytes: 70883737600
+    cache.m3.medium:
+      MaxMemoryBytes: 2988441600
+    cache.m3.large:
+      MaxMemoryBytes: 6501171200
+    cache.m3.xlarge:
+      MaxMemoryBytes: 14260633600
+    cache.m3.2xlarge:
+      MaxMemoryBytes: 29989273600
+    cache.m4.large:
+      MaxMemoryBytes: 6892593152
+    cache.m4.xlarge:
+      MaxMemoryBytes: 15328501760
+    cache.m4.2xlarge:
+      MaxMemoryBytes: 31889126359
+    cache.m4.4xlarge:
+      MaxMemoryBytes: 65257290629
+    cache.m4.10xlarge:
+      MaxMemoryBytes: 166047614239
+    cache.m5.large:
+      MaxMemoryBytes: 6854542746
+    cache.m5.xlarge:
+      MaxMemoryBytes: 13891921715
+    cache.m5.2xlarge:
+      MaxMemoryBytes: 27966669210
+    cache.m5.4xlarge:
+      MaxMemoryBytes: 56116178125
+    cache.m5.12xlarge:
+      MaxMemoryBytes: 168715971994
+    cache.m5.24xlarge:
+      MaxMemoryBytes: 337500562842
+    cache.m6g.large:
+      MaxMemoryBytes: 6854542746
+    cache.m6g.xlarge:
+      MaxMemoryBytes: 13891921715
+    cache.m6g.2xlarge:
+      MaxMemoryBytes: 27966669210
+    cache.m6g.4xlarge:
+      MaxMemoryBytes: 56116178125
+    cache.m6g.8xlarge:
+      MaxMemoryBytes: 111325552312
+    cache.m6g.12xlarge:
+      MaxMemoryBytes: 168715971994
+    cache.m6g.16xlarge:
+      MaxMemoryBytes: 225000375228
+    cache.c1.xlarge:
+      MaxMemoryBytes: 6501171200
+    cache.r3.large:
+      MaxMemoryBytes: 14470348800
+    cache.r3.xlarge:
+      MaxMemoryBytes: 30513561600
+    cache.r3.2xlarge:
+      MaxMemoryBytes: 62495129600
+    cache.r3.4xlarge:
+      MaxMemoryBytes: 126458265600
+    cache.r3.8xlarge:
+      MaxMemoryBytes: 254384537600
+    cache.r4.large:
+      MaxMemoryBytes: 13201781556
+    cache.r4.xlarge:
+      MaxMemoryBytes: 26898228839
+    cache.r4.2xlarge:
+      MaxMemoryBytes: 54197537997
+    cache.r4.4xlarge:
+      MaxMemoryBytes: 108858546586
+    cache.r4.8xlarge:
+      MaxMemoryBytes: 218255432090
+    cache.r4.16xlarge:
+      MaxMemoryBytes: 437021573120
+    cache.r5.large:
+      MaxMemoryBytes: 14037181030
+    cache.r5.xlarge:
+      MaxMemoryBytes: 28261849702
+    cache.r5.2xlarge:
+      MaxMemoryBytes: 56711183565
+    cache.r5.4xlarge:
+      MaxMemoryBytes: 113609865216
+    cache.r5.12xlarge:
+      MaxMemoryBytes: 341206346547
+    cache.r5.24xlarge:
+      MaxMemoryBytes: 682485973811
+    cache.r6g.large:
+      MaxMemoryBytes: 14037181030
+    cache.r6g.xlarge:
+      MaxMemoryBytes: 28261849702
+    cache.r6g.2xlarge:
+      MaxMemoryBytes: 56711183565
+    cache.r6g.4xlarge:
+      MaxMemoryBytes: 113609865216
+    cache.r6g.8xlarge:
+      MaxMemoryBytes: 225000375228
+    cache.r6g.12xlarge:
+      MaxMemoryBytes: 341206346547
+    cache.r6g.16xlarge:
+      MaxMemoryBytes: 450000750456
+
+Conditions:
+  RestoreFromBackup: !Not [!Equals [!Ref SnapshotName, ""]]
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+
+  HasCPUHighAlarm001: !Not [!Equals [!Ref CPUHighThreshold, 0]]
+  HasEvictionsHighAlarm001: !Not [!Equals [!Ref EvictionsHighThreshold, 0]]
+  HasConnectionsHighAlarm001: !Not [!Equals [!Ref ConnectionsHighThreshold, 0]]
+  HasNewConnectionsHighAlarm001:
+    !Not [!Equals [!Ref NewConnectionsHighThreshold, 0]]
+  HasMemoryUsageHighAlarm001: !Not [!Equals [!Ref MemoryUsageHighThreshold, 0]]
+
+  HasSecondNode: !Equals [!Ref NumNodes, 2]
+
+  HasCPUHighAlarm002:
+    !And [!Condition HasSecondNode, !Condition HasCPUHighAlarm001]
+  HasEvictionsHighAlarm002:
+    !And [!Condition HasSecondNode, !Condition HasEvictionsHighAlarm001]
+  HasConnectionsHighAlarm002:
+    !And [!Condition HasSecondNode, !Condition HasConnectionsHighAlarm001]
+  HasNewConnectionsHighAlarm002:
+    !And [!Condition HasSecondNode, !Condition HasNewConnectionsHighAlarm001]
+  HasMemoryUsageHighAlarm002:
+    !And [!Condition HasSecondNode, !Condition HasMemoryUsageHighAlarm001]
+
+  HasDefaultParameterGroup: !Equals [!Ref ParameterGroup, ""]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  SubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: !Sub ${EnvironmentName}-${ClusterName}
+      Description: !Sub Subnet group for the ${EnvironmentName}-${ClusterName} Redis cluster.
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+
+  DefaultParameterGroup:
+    Type: AWS::ElastiCache::ParameterGroup
+    Condition: HasDefaultParameterGroup
+    Properties:
+      CacheParameterGroupFamily:
+        !FindInMap [EngineVersions, !Ref EngineVersion, ParameterGroupFamily]
+      Description: !Ref ClusterDescription
+      Properties:
+        reserved-memory-percent:
+          !FindInMap [EngineVersions, !Ref EngineVersion, ReservedMemoryPercent]
+
+  ReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      CacheParameterGroupName: !If
+        - HasDefaultParameterGroup
+        - !Ref DefaultParameterGroup
+        - !Ref ParameterGroup
+      ReplicationGroupId: !Sub ${EnvironmentName}-${ClusterName}
+      ReplicationGroupDescription: !Ref ClusterDescription
+      Engine: redis
+      EngineVersion: !Ref EngineVersion
+      CacheNodeType: !Ref NodeType
+      NumCacheClusters: !Ref NumNodes
+      AutomaticFailoverEnabled: !Ref AutomaticFailoverEnabled
+      AutoMinorVersionUpgrade: !Ref AutoMinorVersionUpgrade
+      CacheSubnetGroupName: !Ref SubnetGroup
+      SecurityGroupIds:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+      SnapshotName:
+        !If [RestoreFromBackup, !Ref SnapshotName, !Ref "AWS::NoValue"]
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  HostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/redis/${ClusterName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Value: !GetAtt ReplicationGroup.PrimaryEndPoint.Address
+
+  PortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/redis/${ClusterName}/port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Value: !GetAtt ReplicationGroup.PrimaryEndPoint.Port
+
+  CPUHighAlarm001:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasCPUHighAlarm001
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-001-high-cpu
+      AlarmDescription: !Sub "${CPUHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster CPU is high."
+      Namespace: AWS/ElastiCache
+      MetricName: EngineCPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-001
+
+  EvictionsHighAlarm001:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasEvictionsHighAlarm001
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-001-high-evictions
+      AlarmDescription: !Sub "${EvictionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster evictions are high."
+      Namespace: AWS/ElastiCache
+      MetricName: Evictions
+      Unit: Count
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref EvictionsHighThreshold
+      Period: !Ref EvictionsHighPeriod
+      EvaluationPeriods: !Ref EvictionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-001
+
+  ConnectionsHighAlarm001:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasConnectionsHighAlarm001
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-001-high-connections
+      AlarmDescription: !Sub "${ConnectionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster connections are high."
+      Namespace: AWS/ElastiCache
+      MetricName: CurrConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ConnectionsHighThreshold
+      Period: !Ref ConnectionsHighPeriod
+      EvaluationPeriods: !Ref ConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-001
+
+  NewConnectionsHighAlarm001:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasNewConnectionsHighAlarm001
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-001-high-new-connections
+      AlarmDescription: !Sub "${NewConnectionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster new connections are high."
+      Namespace: AWS/ElastiCache
+      MetricName: NewConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref NewConnectionsHighThreshold
+      Period: !Ref NewConnectionsHighPeriod
+      EvaluationPeriods: !Ref NewConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-001
+
+  MemoryUsageHighAlarm001:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMemoryUsageHighAlarm001
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-001-high-memory
+      AlarmDescription: !Sub "${MemoryUsageHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster memory usage is high."
+      Metrics:
+        - Id: e1
+          Label: percentMemoryUsed
+          Expression: !Sub
+            - "100*m1/(${MaxMemoryBytes}*(100-${ReservedMemoryPercent})/100)"
+            - MaxMemoryBytes:
+                !FindInMap [NodeTypes, !Ref NodeType, MaxMemoryBytes]
+              ReservedMemoryPercent: !If
+                - HasDefaultParameterGroup
+                - !FindInMap [
+                    EngineVersions,
+                    !Ref EngineVersion,
+                    ReservedMemoryPercent,
+                  ]
+                - !Ref AlarmHintReservedMemoryPercent
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: BytesUsedForCache
+              Namespace: AWS/ElastiCache
+              Dimensions:
+                - Name: CacheClusterId
+                  Value: !Sub ${ReplicationGroup}-001
+            Period: !Ref MemoryUsageHighPeriod
+            Stat: Average
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref MemoryUsageHighThreshold
+      EvaluationPeriods: !Ref MemoryUsageHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+
+  CPUHighAlarm002:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasCPUHighAlarm002
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-002-high-cpu
+      AlarmDescription: !Sub "${CPUHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster CPU is high."
+      Namespace: AWS/ElastiCache
+      MetricName: EngineCPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${CPUHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-002
+
+  EvictionsHighAlarm002:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasEvictionsHighAlarm002
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-002-high-evictions
+      AlarmDescription: !Sub "${EvictionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster evictions are high."
+      Namespace: AWS/ElastiCache
+      MetricName: Evictions
+      Unit: Count
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref EvictionsHighThreshold
+      Period: !Ref EvictionsHighPeriod
+      EvaluationPeriods: !Ref EvictionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${EvictionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-002
+
+  ConnectionsHighAlarm002:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasConnectionsHighAlarm002
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-002-high-connections
+      AlarmDescription: !Sub "${ConnectionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster connections are high."
+      Namespace: AWS/ElastiCache
+      MetricName: CurrConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ConnectionsHighThreshold
+      Period: !Ref ConnectionsHighPeriod
+      EvaluationPeriods: !Ref ConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${ConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-002
+
+  NewConnectionsHighAlarm002:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasNewConnectionsHighAlarm002
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-002-high-new-connections
+      AlarmDescription: !Sub "${NewConnectionsHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster new connections are high."
+      Namespace: AWS/ElastiCache
+      MetricName: NewConnections
+      Unit: Count
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref NewConnectionsHighThreshold
+      Period: !Ref NewConnectionsHighPeriod
+      EvaluationPeriods: !Ref NewConnectionsHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${NewConnectionsHighUrgency}-urgency-alerts
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Sub ${ReplicationGroup}-002
+
+  MemoryUsageHighAlarm002:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasMemoryUsageHighAlarm002
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ClusterName}-redis-002-high-memory
+      AlarmDescription: !Sub "${MemoryUsageHighUrgency}: redis: ${EnvironmentName}-${ClusterName} cluster memory usage is high."
+      Metrics:
+        - Id: e1
+          Label: percentMemoryUsed
+          Expression: !Sub
+            - "100*m1/(${MaxMemoryBytes}*(100-${ReservedMemoryPercent})/100)"
+            - MaxMemoryBytes:
+                !FindInMap [NodeTypes, !Ref NodeType, MaxMemoryBytes]
+              ReservedMemoryPercent: !If
+                - HasDefaultParameterGroup
+                - !FindInMap [
+                    EngineVersions,
+                    !Ref EngineVersion,
+                    ReservedMemoryPercent,
+                  ]
+                - !Ref AlarmHintReservedMemoryPercent
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: BytesUsedForCache
+              Namespace: AWS/ElastiCache
+              Dimensions:
+                - Name: CacheClusterId
+                  Value: !Sub ${ReplicationGroup}-002
+            Period: !Ref MemoryUsageHighPeriod
+            Stat: Average
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref MemoryUsageHighThreshold
+      EvaluationPeriods: !Ref MemoryUsageHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${MemoryUsageHighUrgency}-urgency-alerts
+
+Outputs:
+  ClusterName:
+    Description: The name of the cluster.
+    Value: !Ref ReplicationGroup
+
+  Host:
+    Description: The primary endpoint of the cluster.
+    Value: !GetAtt ReplicationGroup.PrimaryEndPoint.Address
+
+  Port:
+    Description: The primary port of the cluster.
+    Value: !GetAtt ReplicationGroup.PrimaryEndPoint.Port

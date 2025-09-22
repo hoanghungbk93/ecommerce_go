@@ -1,0 +1,95 @@
+---
+Description: >
+  Stores vertical configuration as SSM parameters and exported stack outputs.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the load balancer. The vertical name
+      MUST be lowercase as it is used in the naming convention of resources
+      created by this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  CloudformationBaseUrl:
+    Description: Base URL for the ltk-cloudformation templates.
+    Type: String
+    AllowedPattern: "^s3:\\/\\/cloudformation\\.liketoknow\\.it\\/templates\\/[a-f0-9]{40}$"
+    Default: s3://cloudformation.adela.it/templates/{{SHARED_TEMPLATE_GITSHA}}
+
+Mappings:
+  SSLCerts:
+    Fn::Transform:
+      - Name: AWS::Include
+        Parameters:
+          Location:
+            Fn::Sub: ${CloudformationBaseUrl}/${VerticalName}/includes/mappings/ssl-certs.yml
+  Domains:
+    Fn::Transform:
+      - Name: AWS::Include
+        Parameters:
+          Location:
+            Fn::Sub: ${CloudformationBaseUrl}/${VerticalName}/includes/mappings/domains.yml
+
+Resources:
+
+  PrivateDomainNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/config/${VerticalName}/private-domain-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !FindInMap [Domains, Private, !Ref EnvironmentName]
+
+  PublicDomainNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/config/${VerticalName}/public-domain-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !FindInMap [Domains, Public, !Ref EnvironmentName]
+
+  SSLCertArnParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/config/${VerticalName}/ssl-certificate-arn
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !FindInMap [SSLCerts, !Ref "AWS::Region", !Ref EnvironmentName]
+
+Outputs:
+  PrivateDomainName:
+    Value: !GetAtt PrivateDomainNameParameter.Value
+    Export:
+      Name: !Join
+        - ":"
+        - - !Ref AWS::StackName
+          - private-domain-name
+  PublicDomainName:
+    Value: !GetAtt PublicDomainNameParameter.Value
+    Export:
+      Name: !Join
+        - ":"
+        - - !Ref AWS::StackName
+          - public-domain-name
+  SSLCertArn:
+    Value: !GetAtt SSLCertArnParameter.Value
+    Export:
+      Name: !Join
+        - ":"
+        - - !Ref AWS::StackName
+          - ssl-certificate-arn
+  SSLCertArnInUsEast1:
+    Value: !FindInMap [SSLCerts, ap-southeast-1, !Ref EnvironmentName]
+    Export:
+      Name: !Join
+        - ":"
+        - - !Ref AWS::StackName
+          - ap-southeast-1
+          - ssl-certificate-arn

@@ -1,0 +1,127 @@
+Description: Creates an alarm for an eventbus rule
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    AllowedPattern: "[-a-z0-9]+"
+
+  EventBusName:
+    Type: String
+
+  RuleName:
+    Description: >
+      The name of an eventbus rule to monitor.
+      ( not a rule id, don't use !Ref on a rule resource type without cleaning it up )
+    Type: String
+
+  # ThrottledRules
+
+  ThrottledRulesThreshold:
+    Type: Number
+    # Default: 1
+    MinValue: 0
+
+  ThrottledRulesPeriod:
+    Type: Number
+    # Default: 300
+
+  ThrottledRulesEvaluationPeriods:
+    Type: Number
+    # Default: 1
+
+  ThrottledRulesSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+  # FailedInvocations
+
+  FailedInvocationsMetric:
+    Description: >
+      If your rule has an sqs deadletter recipient use InvocationsFailedToBeSentToDlq ( sqs deadletter recipient should have an alarm when messages exist ).
+      If your rule has no deadletter recipient use FailedInvocations.
+      If your rule has a deadletter recipient but that target has no alarm on receiving a message use DeadLetterInvocations.
+    Type: String
+    AllowedValues:
+      [InvocationsFailedToBeSentToDlq, FailedInvocations, DeadLetterInvocations]
+
+  FailedInvocationsThreshold:
+    Type: Number
+    # Default: 1
+    MinValue: 0
+
+  FailedInvocationsPeriod:
+    Type: Number
+    # Default: 300
+
+  FailedInvocationsEvaluationPeriods:
+    Type: Number
+    # Default: 1
+
+  FailedInvocationsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+Conditions:
+  HasThrottledRulesAlarm: !Not [!Equals [!Ref ThrottledRulesThreshold, 0]]
+  HasFailedInvocationsAlarm: !Not [!Equals [!Ref FailedInvocationsThreshold, 0]]
+
+Resources:
+  #
+  ThrottledRulesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasThrottledRulesAlarm
+    Properties:
+      AlarmName: !Sub ${EventBusName}-${RuleName}-ThrottlesTooHigh
+      AlarmDescription: !Sub "${ThrottledRulesSeverity}: eventbus-rule: ${EventBusName}|${RuleName} throttled invocations are too high."
+      TreatMissingData: notBreaching # aws only publishes the metric when it happens otherwise there is no data to sample
+      Namespace: AWS/Events
+      MetricName: ThrottledRules
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ThrottledRulesThreshold
+      Period: !Ref ThrottledRulesPeriod
+      EvaluationPeriods: !Ref ThrottledRulesEvaluationPeriods
+      Dimensions:
+        - Name: EventBusName
+          Value: !Ref EventBusName
+        - Name: RuleName
+          Value: !Ref RuleName
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  FailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasFailedInvocationsAlarm
+    Properties:
+      AlarmName: !Sub ${EventBusName}-${RuleName}-${FailedInvocationsMetric}-TooHigh
+      AlarmDescription: !Sub "${FailedInvocationsSeverity}: eventbus-rule: ${EventBusName}|${RuleName} ${FailedInvocationsMetric} are too high."
+      TreatMissingData: notBreaching # aws only publishes the metric when it happens otherwise there is no data to sample
+      Namespace: AWS/Events
+      MetricName: !Ref FailedInvocationsMetric
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref FailedInvocationsThreshold
+      Period: !Ref FailedInvocationsPeriod
+      EvaluationPeriods: !Ref FailedInvocationsEvaluationPeriods
+      Dimensions:
+        - Name: EventBusName
+          Value: !Ref EventBusName
+        - Name: RuleName
+          Value: !Ref RuleName
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn

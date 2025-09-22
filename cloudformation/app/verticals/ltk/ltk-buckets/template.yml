@@ -1,0 +1,79 @@
+Description: Creates S3 buckets needed for LTK.
+
+Resources:
+
+  CloudFormationTemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: cloudformation.adela.it
+      Tags:
+        - Key: Vertical
+          Value: ltk
+
+  CloudFormationTemplatesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CloudFormationTemplatesBucket
+      PolicyDocument:
+        Statement:
+          - Sid: Allow access from ltk-ops user in dev accounts.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::441221892871:root     # prod
+                - arn:aws:iam::282492028148:root     # ltk
+                - arn:aws:iam::406233834736:root     # tools
+                - arn:aws:iam::232188586941:root     # rad
+                - arn:aws:iam::676403976676:root     # collabs
+                - arn:aws:iam::022925635359:root     # devops
+                - arn:aws:iam::929468408151:root     # prodk8s
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource:
+              - !Sub ${CloudFormationTemplatesBucket.Arn}
+              - !Sub ${CloudFormationTemplatesBucket.Arn}/*
+
+  LtkLambdaArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: ltk-lambda-artifacts.liketoknow.it
+      Tags:
+        - Key: Vertical
+          Value: ltk
+
+  LtkLambdaArtifactsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LtkLambdaArtifactsBucket
+      PolicyDocument:
+        Statement:
+          - Sid: Allow access from ltk dev account.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::441221892871:root     # prod
+                - arn:aws:iam::282492028148:root     # ltk
+                - arn:aws:iam::406233834736:root     # tools
+                - arn:aws:iam::232188586941:root     # rad
+                - arn:aws:iam::676403976676:root     # collabs
+                - arn:aws:iam::022925635359:root     # devops
+                - arn:aws:iam::929468408151:root     # prodk8s
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource:
+              - !Sub ${LtkLambdaArtifactsBucket.Arn}
+              - !Sub ${LtkLambdaArtifactsBucket.Arn}/*
+          - Sid: Allow write access for circle artificer.
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/circle-artificer
+            Action:
+              - s3:Get*
+              - s3:List*
+              - s3:PutObject
+            Resource:
+              - !Sub ${LtkLambdaArtifactsBucket.Arn}
+              - !Sub ${LtkLambdaArtifactsBucket.Arn}/*

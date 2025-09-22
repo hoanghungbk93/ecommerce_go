@@ -1,0 +1,14 @@
+Description: Track and make vertical information readily available
+
+Resources:
+  VerticalRootARNs:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: StringList
+      Name: /global/verticals/root-account-arns
+      Value: !Join
+        - ","
+        - - "arn:aws:iam::282492028148:root" # ltk-dev
+          - "arn:aws:iam::406233834736:root" # publishing
+          - "arn:aws:iam::676403976676:root" # collabs
+          - "arn:aws:iam::232188586941:root" # rad

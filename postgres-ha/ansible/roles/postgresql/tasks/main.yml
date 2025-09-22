@@ -1,0 +1,71 @@
+---
+- name: Install required packages
+  apt:
+    name:
+      - wget
+      - ca-certificates
+      - gnupg
+      - lsb-release
+    state: present
+    update_cache: yes
+
+- name: Add PostgreSQL APT key
+  get_url:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    dest: /tmp/postgresql.asc
+
+- name: Import PostgreSQL APT key
+  shell: cat /tmp/postgresql.asc | gpg --dearmor | sudo tee /etc/apt/trusted.gpg.d/postgresql.gpg >/dev/null
+
+- name: Add PostgreSQL APT repository
+  apt_repository:
+    repo: "deb http://apt.postgresql.org/pub/repos/apt/ jammy-pgdg main"
+    state: present
+    update_cache: yes
+
+- name: Install PostgreSQL packages
+  apt:
+    name:
+      - postgresql-{{ postgres_version }}
+      - postgresql-client-{{ postgres_version }}
+      - postgresql-contrib-{{ postgres_version }}
+      - postgresql-server-dev-{{ postgres_version }}
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+
+- name: Stop PostgreSQL service (will be managed by Patroni)
+  systemd:
+    name: postgresql
+    state: stopped
+    enabled: false
+
+- name: Create postgres user for system access
+  user:
+    name: postgres
+    system: yes
+    shell: /bin/bash
+    home: /var/lib/postgresql
+    create_home: yes
+
+- name: Create PostgreSQL data directory
+  file:
+    path: /var/lib/postgresql/{{ postgres_version }}/main
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'
+
+- name: Remove default PostgreSQL data if exists
+  file:
+    path: /var/lib/postgresql/{{ postgres_version }}/main
+    state: absent
+  when: ansible_hostname == "postgres-node1"
+
+- name: Recreate PostgreSQL data directory
+  file:
+    path: /var/lib/postgresql/{{ postgres_version }}/main
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0700'

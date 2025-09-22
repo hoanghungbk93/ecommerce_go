@@ -1,0 +1,422 @@
+---
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  LoadBalancerName:
+    Type: String
+
+  VerticalName:
+    Type: String
+
+  DomainName:
+    Description: >
+      The domain name of the route 53 record to be created for this load
+      balancer. Also used for SSL if this is a public domain.
+    Type: String
+
+  DNSName:
+    Description: >
+      The name of the alias created for the ALB. This parameter will be ignored
+      if CreateDNS is false. If not specified, the name of the load balancer is
+      be used.
+    Type: String
+    Default: ""
+
+  Scheme:
+    Type: String
+    AllowedValues: [internal, private, internet-facing, public]
+
+  IdleTimeout:
+    Type: Number
+    Description: >
+      The time (in seconds) that a connection to the load balancer can remain
+      idle, which means no data is sent over the connection. After the specified
+      time, the load balancer closes the connection.
+    MinValue: 10
+    Default: 60
+
+  FirewallBadResponseCodesMaxPerMinute:
+    Type: Number
+    Description: >-
+      The maximum number of bad requests per minute an origin IP can issue
+      before they are considered abusive and blocked.  Does nothing if <= 0
+    MinValue: 0
+    Default: 0
+
+  FirewallBadResponseCodesRegex:
+    Type: String
+    Description: >-
+      A python regular expression used to select access responses that indicate
+      abusive behavior.  This string is used in python like:
+        re.compile(string).match(example_http_code_str)
+      Unused unless FirewallBadResponseCodesMaxPerMinute > 0
+    Default: "(?:4..)"  # 4xx responses indicate client errors
+
+  FirewallBadResponseCodesBlockSeconds:
+    Type: Number
+    Description: >-
+      How long an abusive user is blocked.
+    Default: 14400  # 4 hours
+    MinValue: 300  # 5 minutes
+
+  AccessLoggingBucket:
+    Description: >-
+      The s3 bucket name where `EnvironmentName`-`LoadBalancerName` logs are
+      saved.  Defaults to 'elb-logs-va' when `EnvironmentName` is 'prod'
+      Ignored if FirewallBadResponseCodesMaxPerMinute is specified
+    Type: String
+    Default: ""
+
+  ParentStackName:
+    Type: String
+    Default: ''
+
+  WithLegacyParameters:
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  UseNamedLoadBalancer:
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  WithExports:
+    Type: String
+    AllowedValues: [true, false]
+    Description: >
+      Set this to false if you dont need the default listener exported. This is
+      useful when deploying multiple ALBs with the same name.
+    Default: true
+
+Conditions:
+  HasCustomDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  IsPublic: !Or
+    - !Equals [!Ref Scheme, internet-facing]
+    - !Equals [!Ref Scheme, public]
+  IsPrivate: !Or
+    - !Equals [!Ref Scheme, internal]
+    - !Equals [!Ref Scheme, private]
+
+  HasAccessLoggingBucket: !Not [!Equals [!Ref AccessLoggingBucket, '']]
+  CreateFirewall: !And
+    - !Condition IsPublic
+    - !Not [!Equals [!Ref FirewallBadResponseCodesMaxPerMinute, 0]]
+  IsAccessLoggingEnabled: !Or
+    - !Condition CreateFirewall
+    - !Condition HasAccessLoggingBucket
+    - !Equals [!Ref EnvironmentName, 'prod']
+  CreateLoggingBucket: !And
+    - !Condition CreateFirewall
+    - !Not [!Condition HasAccessLoggingBucket]
+  EnableUsaEmbargoWebACL: !And
+    - !Condition IsPublic
+    - !Not [!Condition CreateFirewall]
+  HasParentStackName: !Not [!Equals [!Ref ParentStackName, '']]
+  HasLegacyParameters: !Equals [!Ref WithLegacyParameters, true]
+  HasNamedLoadBalancer: !Equals [!Ref UseNamedLoadBalancer, true]
+  HasExports: !Equals [!Ref WithExports, true]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Mappings:
+  Inventory:
+    CloudFormation:
+      BaseURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      SecurityGroupIngress: !If
+        - IsPrivate
+        - !Ref AWS::NoValue
+        -
+          # Allow access to ALB from anywhere on the internet
+          - CidrIp: 0.0.0.0/0
+            IpProtocol: '-1'
+
+  EcsSecurityGroupIngressFromLoadBalancer:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the ALB
+      GroupId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+      IpProtocol: '-1'
+      SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  PrivateLoadBalancerIngressFromECS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsPrivate
+    Properties:
+      Description: >-
+        Only accept traffic from a container in the default security group
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: '-1'
+      SourceSecurityGroupId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: !If [IsPublic, internet-facing, internal]
+      Name: !If
+        - HasNamedLoadBalancer
+        - !Sub ${Namespace}-${LoadBalancerName}
+        - !Ref AWS::NoValue
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: !Ref IdleTimeout
+        - Key: access_logs.s3.enabled
+          Value: !If
+            - IsAccessLoggingEnabled
+            - 'true'
+            - 'false'
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.bucket
+            Value: !If
+              - CreateLoggingBucket
+              - !GetAtt LoggingBucket.Outputs.BucketName
+              - !If
+                - HasAccessLoggingBucket
+                - !Ref AccessLoggingBucket
+                - 'elb-logs-va'
+          - !Ref AWS::NoValue
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.prefix
+            Value: !Sub ${Namespace}-${LoadBalancerName}
+          - !Ref AWS::NoValue
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub
+            - '${EnvironmentName}:stacksets:v2:env:vpc:${SubnetType}-subnets'
+            - SubnetType: !If [IsPublic, public, private]
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Ref LoadBalancerName
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: LoggingBucket
+            Value: !If
+              - CreateLoggingBucket
+              - !Ref LoggingBucket
+              - !If [
+                  HasAccessLoggingBucket,
+                  !Ref AccessLoggingBucket,
+                  "elb-logs-va",
+                  ]
+          - !Ref AWS::NoValue
+
+  # A dummy target group is used to setup the ALB to just drop traffic
+  # initially, before any real service target groups have been added.
+  DummyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !GetAtt LoadBalancer.LoadBalancerName
+      HealthCheckIntervalSeconds: 6
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - !If
+          - HasSubEnvironment
+          - Key: SubEnvironment
+            Value: !Ref SubEnvironmentName
+          - !Ref AWS::NoValue
+
+  WebListeners:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/components/alb/web-listeners.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerArn: !Ref LoadBalancer
+        EnableSSL: !If [IsPublic, true, false]
+        ForceHTTPS: !If [IsPublic, true, false]
+        TargetGroupArn: !Ref DummyTargetGroup
+        DomainName: !Ref DomainName
+
+  RecordSet:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/components/alias-record.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerDNSName: !GetAtt LoadBalancer.DNSName
+        LoadBalancerCanonicalHostedZoneID: !GetAtt >-
+          LoadBalancer.CanonicalHostedZoneID
+        HostedZoneName: !Ref DomainName
+        RecordSetName: !If
+          - HasCustomDNSName
+          - !Sub ${Namespace}-${DNSName}
+          - !Sub ${Namespace}-${LoadBalancerName}
+
+  LegacyHostParameter:
+    Condition: HasLegacyParameters
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt RecordSet.Outputs.RecordSet
+
+  LoadBalancerHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/${LoadBalancerName}/load-balancer/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt RecordSet.Outputs.RecordSet
+
+  LoadBalancerDNSNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/${LoadBalancerName}/load-balancer/dns-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.DNSName
+
+  LoadBalancerFullNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/${LoadBalancerName}/load-balancer/full-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+  LoadBalancerNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/${LoadBalancerName}/load-balancer/name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.LoadBalancerName
+
+  LoggingBucket:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateLoggingBucket
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/addons/logging-bucket.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        Namespace: !Ref Namespace
+        LoadBalancerName: !Ref LoadBalancerName
+        LoggingEnabledTagValue: !If [CreateLoggingBucket, 'true', 'false']
+
+  # FIXME: this doesnt exist
+  Firewall:
+    Type: AWS::CloudFormation::Stack
+    Condition: CreateFirewall
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/addons/firewall.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        LoadBalancerArn: !Ref LoadBalancer
+        LoadBalancerName: !Ref LoadBalancerName
+        LoadBalancerFullName: !GetAtt LoadBalancer.LoadBalancerFullName
+        LoggingBucketName: !GetAtt LoggingBucket.Outputs.BucketName
+        BlockSeconds: !Ref FirewallBadResponseCodesBlockSeconds
+        BadResponseCodesRegex: !Ref FirewallBadResponseCodesRegex
+        BadResponseCodesMaxPerMinute: !Ref FirewallBadResponseCodesMaxPerMinute
+
+  UsaEmbargoWafV2WebAcl:
+    Type: AWS::WAFv2::WebACLAssociation
+    Condition: EnableUsaEmbargoWebACL
+    Properties:
+      ResourceArn: !Ref LoadBalancer
+      WebACLArn: !ImportValue WafV2RegionalWebAclUsaEmbargoArn
+
+  ServiceDiscovery:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsPrivate
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/addons/service-discovery.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        LoadBalancerName: !Ref LoadBalancerName
+        LoadBalancerDNSName: !GetAtt LoadBalancer.DNSName
+
+Outputs:
+  HTTPListener:
+    Description: The ARN of the public load balancer's Listener
+    Value: !GetAtt WebListeners.Outputs.HTTPListener
+
+  HTTPSListener:
+    Condition: IsPublic
+    Description: The ARN of the public load balancer's Listener
+    Value: !GetAtt WebListeners.Outputs.HTTPSListener
+
+  DefaultListener:
+    Value: !GetAtt WebListeners.Outputs.DefaultListener
+
+  DefaultListenerWithExport:
+    Value: !GetAtt WebListeners.Outputs.DefaultListener
+    Condition: HasExports
+    Export:
+      Name: !If
+        - HasParentStackName
+        - !Sub ${ParentStackName}:DefaultListener
+        - !Sub >-
+            ${EnvironmentName}:load-balancer:v2:${LoadBalancerName}:default-listener
+
+  LoadBalancerHost:
+    Description: The url of the internal load balancer
+    Value: !GetAtt LoadBalancer.DNSName
+
+  LoadBalancerName:
+    Condition: HasParentStackName
+    Value: !GetAtt LoadBalancer.LoadBalancerName
+
+# vim: set ft=yaml.cloudformation :

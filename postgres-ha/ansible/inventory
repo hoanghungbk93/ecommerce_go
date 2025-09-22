@@ -1,0 +1,19 @@
+[postgres_nodes]
+postgres-node1 ansible_host=13.212.31.40 private_ip=10.0.1.10 patroni_node_id=1
+postgres-node2 ansible_host=47.130.3.209 private_ip=10.0.2.10 patroni_node_id=2
+
+[haproxy_nodes]
+haproxy-node ansible_host=13.214.29.96 private_ip=10.0.3.10
+
+[etcd_nodes]
+haproxy-node ansible_host=13.214.29.96 private_ip=10.0.3.10
+
+[all:vars]
+ansible_user=ubuntu
+ansible_ssh_private_key_file=~/.ssh/postgres-ha-key
+ansible_ssh_common_args='-o StrictHostKeyChecking=no'
+postgres_version=15
+patroni_scope=odoo-ha
+replication_user=replicator
+replication_password=secret
+postgres_password=secret

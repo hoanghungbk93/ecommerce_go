@@ -1,0 +1,209 @@
+Description: |
+  Deploy static sites with theoretical roll back capabilities.
+
+Parameters:
+  GitSha:
+    Description: |
+      (former) MAGIC PARAMETER. magic is granted by ltk-ops directly handling
+      CF template.
+    Type: String
+
+  VerticalName:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  ProjectName:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, prod, qa]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  DeploymentPathPrefix:
+    Description: Add path prefix to deployed resources
+    Type: String
+    Default: ""
+
+Conditions:
+  HasSubEnvironmentName: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Resources:
+
+  EnvNamespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  # The StaticSiteDeploy resource encapsulates the act of deploying our versioned
+  # static artifacts into an S3 website bucket.
+  StaticSiteDeploy:
+    Type: Custom::StaticSiteDeploy
+    DependsOn:
+      - LambdaFunction
+    Properties:
+      ServiceToken: !GetAtt LambdaFunction.Arn
+      GitSha: !Ref GitSha
+
+  # This resource along with its role should be deployed first.
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaFunctionRole
+    Properties:
+      Description: !Sub Deploys ${VerticalName}/${ProjectName} to site bucket
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 300
+      Code:
+        ZipFile: !Sub |
+          import os, json, uuid
+          import boto3
+          import cfnresponse
+          from boto3.s3.transfer import TransferConfig
+          def get_pri(event):
+            pri = event.get("physical_resource_id")
+            if pri:
+              return pri
+            return f'${AWS::StackName}-{event.get("LogicalResourceId")}-{str(uuid.uuid4()).split("-")[0]}'
+          def sync(GIT_SHA):
+            ENV = "${EnvironmentName}"
+            PATH_PREFIX = "${DeploymentPathPrefix}"
+            BUCKET_PREFIX = ENV + "-${VerticalName}-${ProjectName}"
+            ARTIFACTS_BUCKET = BUCKET_PREFIX + "-artifacts"
+            SITE_BUCKET = BUCKET_PREFIX + "-site"
+            SUBENV = "${SubEnvironmentName}"
+            if SUBENV:
+              tbp = SITE_BUCKET.split("-", 1)
+              tbp[0] = f"{ENV}-{SUBENV}"
+              SITE_BUCKET = "-".join(tbp)
+            SRC_PREFIX = "versions/{}/".format(GIT_SHA)
+            client = boto3.client("s3")
+            bucket = boto3.resource("s3").Bucket(ARTIFACTS_BUCKET)
+            objects = []
+            for page in client.get_paginator('list_objects_v2').paginate(Bucket=ARTIFACTS_BUCKET, Prefix=SRC_PREFIX):
+              objects += page.get("Contents", [])
+            max_obj = max(objects, key=lambda x: x["Size"])
+            TRANS_CFG = TransferConfig(multipart_threshold=max_obj["Size"])
+            def src(key):
+              return SRC_PREFIX + key
+            def dst(key):
+              if PATH_PREFIX:
+                return "{}/{}".format(PATH_PREFIX, key)
+              return key
+            def src_dict(key):
+              return {"Bucket": ARTIFACTS_BUCKET, "Key": src(key)}
+            def log_root_copy(key):
+              args = [ARTIFACTS_BUCKET, src(key), SITE_BUCKET, key]
+              print("copy: s3://{}/{} to s3://{}/{}".format(*args))
+            def log_copy(key):
+              args = [ARTIFACTS_BUCKET, src(key), SITE_BUCKET, dst(key)]
+              print("copy: s3://{}/{} to s3://{}/{}".format(*args))
+            def root_copy(key):
+              log_root_copy(key)
+              client.copy(src_dict(key), SITE_BUCKET, key, Config=TRANS_CFG)
+            def copy(key):
+              log_copy(key)
+              client.copy(src_dict(key), SITE_BUCKET, dst(key), Config=TRANS_CFG)
+            def file_exists(key):
+              try:
+                boto3.resource('s3').Object(ARTIFACTS_BUCKET, key).load()
+              except client.exceptions.ClientError as e:
+                if e.response['Error']['Code'] == "404":
+                  return False
+                raise
+              return True
+            def deployment_config():
+              key = src("deployment-config.json")
+              if file_exists(key):
+                s = client.get_object(Bucket=ARTIFACTS_BUCKET, Key=key)["Body"].read().decode()
+                r = json.loads(s)
+                if not isinstance(r, list):
+                  if 'dst' not in r:
+                    r['dst'] = 'index.html'
+                  r = [r]
+                return r
+              return [{"dst": "index.html"}]
+            dest_keys = ["/".join(obj["Key"].split("/")[2:]) for obj in objects]
+            dcfg = deployment_config()
+            ignored_keys = ["manifest.json", "deployment-config.json", "version.json", "deploying-version.json"] + [x['dst'] for x in dcfg]
+            for dest_key in dest_keys:
+              if dest_key in ignored_keys:
+                print("skipping {}...".format(dest_key))
+                continue
+              copy(dest_key)
+            def inject_config(cfg):
+              key=cfg['dst']
+              log_copy(key)
+              srcIndexObj=client.get_object(**src_dict(key))
+              t="/static/"+cfg.get("template","js/config/{GIT_SHA}/{ENV}.js")
+              paths = [t.format(GIT_SHA=GIT_SHA, ENV=ENV+"-${VerticalName}")]
+              if SUBENV:
+                [
+                  paths.insert(0, t.format(GIT_SHA=GIT_SHA, ENV=x))
+                  for x in [
+                    f"{ENV}-{SUBENV}",
+                    f"{ENV}-{SUBENV}" "-${VerticalName}",
+                  ]
+                ]
+              cfgPath = next(filter(lambda path: file_exists(src(path[1:])), paths),
+                             t.format(GIT_SHA=GIT_SHA, ENV=ENV))
+              cfgPathSearch="/static/"+cfg.get('replace','js/config.js')
+              body="\n".join([x.replace(cfgPathSearch,cfgPath) for x in srcIndexObj["Body"].read().decode().splitlines()]).encode()
+              key=dst(key)
+              client.put_object(Bucket=SITE_BUCKET, Key=key, Body=body, CacheControl=srcIndexObj.get("CacheControl"), ContentType=srcIndexObj.get("ContentType"), Metadata=srcIndexObj.get("Metadata"))
+            for x in dcfg:
+              inject_config(x)
+            root_copy("version.json")
+            root_copy("deploying-version.json")
+          def lambda_handler(event, context):
+            print(event)
+            req_type = event["RequestType"]
+            git_sha = event.get("ResourceProperties").get("GitSha")
+            pri = get_pri(event)
+            if req_type in ["Create", "Update"]:
+              try:
+                sync(git_sha)
+              except Exception as err:
+                cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": err.__str__(), "GitSha": git_sha, }, pri)
+                raise
+            if req_type == "Update":
+              prev_sha = event.get("OldResourceProperties").get("GitSha")
+              print("last GitSha: {}".format(prev_sha))
+              if prev_sha == git_sha: print("this is a redeploy!")
+            cfnresponse.send(event, context, cfnresponse.SUCCESS, {"GitSha": git_sha}, pri)
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowS3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${EnvironmentName}-${VerticalName}-${ProjectName}-artifacts
+                  - !Sub arn:aws:s3:::${EnvironmentName}-${VerticalName}-${ProjectName}-artifacts/*
+                  - !Sub arn:aws:s3:::${EnvNamespace}-${VerticalName}-${ProjectName}-site
+                  - !Sub arn:aws:s3:::${EnvNamespace}-${VerticalName}-${ProjectName}-site/*
+
+# vim: set ft=yaml.cloudformation :

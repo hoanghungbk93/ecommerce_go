@@ -1,0 +1,10 @@
+---
+Public:
+  dev: ltk.rip
+  qa: liketoknow.it
+  prod: liketoknow.it
+
+Private:
+  dev: ltk.rip
+  qa: ltklocal
+  prod: ltklocal

@@ -1,0 +1,94 @@
+Description: Exports values of pre-existing VPC resources.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [qa, prod, dev]
+
+  PrivateSubnets:
+    Description: Existing private subnets
+    Type: CommaDelimitedList
+
+  PublicSubnets:
+    Description: Existing private subnets
+    Type: CommaDelimitedList
+
+  VpcId:
+    Type: String
+    Description: VPC ID of existing VPC
+    AllowedPattern: "^vpc-[a-f0-9]+"
+
+  DefaultSecurityGroup:
+    Type: String
+    Description: Default security group of existing VPC
+    AllowedPattern: "^sg-[a-f0-9]+"
+
+Resources:
+
+  VpcIdParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/vpc/id
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref VpcId
+
+  VpcPublicSubnetsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/vpc/public-subnets
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: StringList
+      Value: !Join
+        - ","
+        - !Ref PublicSubnets
+
+  VpcPrivateSubnetsParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/vpc/private-subnets
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: StringList
+      Value: !Join
+        - ","
+        - !Ref PrivateSubnets
+
+  VpcDefaultSecurityGroupParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/vpc/default-security-group
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref DefaultSecurityGroup
+
+Outputs:
+
+  VpcId:
+    Description: Unique identifier of the VPC.
+    Value: !Ref VpcId
+    Export:
+      Name: !Join [":", [!Ref EnvironmentName, vpc, id]]
+
+  PublicSubnets:
+    Description: A list of the public subnets in the VPC.
+    Value: !Join
+      - ","
+      - !Ref PublicSubnets
+    Export:
+      Name: !Join [":", [!Ref EnvironmentName, vpc, public-subnets]]
+
+  PrivateSubnets:
+    Description: A list of the private subnets in the VPC.
+    Value: !Join
+      - ","
+      - !Ref PrivateSubnets
+    Export:
+      Name: !Join [":", [!Ref EnvironmentName, vpc, private-subnets]]
+
+  DefaultSecurityGroup:
+    Description: The default security group in the VPC.
+    Value: !Ref DefaultSecurityGroup
+    Export:
+      Name: !Join [":", [!Ref EnvironmentName, vpc, default-security-group]]

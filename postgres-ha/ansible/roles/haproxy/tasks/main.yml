@@ -1,0 +1,61 @@
+---
+- name: Install HAProxy
+  apt:
+    name: haproxy
+    state: present
+    update_cache: yes
+
+- name: Install curl for health checks
+  apt:
+    name: curl
+    state: present
+
+- name: Backup original HAProxy configuration
+  copy:
+    src: /etc/haproxy/haproxy.cfg
+    dest: /etc/haproxy/haproxy.cfg.bak
+    remote_src: yes
+    backup: yes
+
+- name: Generate HAProxy configuration
+  template:
+    src: haproxy.cfg.j2
+    dest: /etc/haproxy/haproxy.cfg
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: restart haproxy
+
+- name: Create HAProxy stats directory
+  file:
+    path: /var/lib/haproxy/stats
+    state: directory
+    owner: haproxy
+    group: haproxy
+    mode: '0755'
+
+- name: Enable HAProxy service
+  systemd:
+    name: haproxy
+    enabled: yes
+
+- name: Start HAProxy service
+  systemd:
+    name: haproxy
+    state: started
+
+- name: Wait for HAProxy to be ready
+  wait_for:
+    port: 5432
+    host: "{{ private_ip }}"
+    timeout: 60
+
+- name: Verify HAProxy stats page
+  uri:
+    url: "http://{{ private_ip }}:8404/stats"
+    method: GET
+  register: haproxy_stats
+  until: haproxy_stats.status == 200
+  retries: 10
+  delay: 5

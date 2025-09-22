@@ -1,0 +1,274 @@
+---
+Description: >-
+  CloudFront CDN
+
+Parameters:
+  Name:
+    Type: String
+    Description: Name for this CDN
+
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Type: String
+
+  CachedMethods:
+    Type: String
+    Default: DEFAULT
+    AllowedValues: [DEFAULT, ALL]
+
+  S3CanonicalUserId:
+    Type: String
+    Default: ""
+
+  AllowedMethods:
+    Type: String
+    Default: DEFAULT
+    AllowedValues: [ALL, LIMITED, DEFAULT]
+    Description: >-
+      Controls which HTTP methods CloudFront processes and forwards to your
+      Amazon S3 bucket or your custom origin.  If you pick ALL, you may need to
+      restrict access to your Amazon S3 bucket or to your custom origin so users
+      can't perform operations that you don't want them to. For example, you
+      might not want users to have permissions to delete objects from your
+      origin.
+
+  DefaultTTL:
+    Type: Number
+    Default: 86400
+
+  MinTTL:
+    Type: Number
+    Default: 0
+
+  MaxTTL:
+    Type: Number
+    Default: 31536000
+
+  ForwardQueryStringValues:
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  OriginKeepaliveTimeout:
+    Type: Number
+    Default: 5
+
+  OriginReadTimeout:
+    Type: Number
+    Default: 30
+
+  OriginDomainName:
+    Type: String
+
+  OriginPath:
+    Type: String
+
+  OriginType:
+    Type: String
+    AllowedValues: [custom, s3]
+    Default: custom
+
+  OriginProtocolPolicy:
+    Type: String
+    Default: http-only
+    AllowedValues: [http-only, match-viewer, https-only]
+
+  ViewerProtocolPolicy:
+    Type: String
+    Default: redirect-to-https
+    AllowedValues: [allow-all, https-only, redirect-to-https]
+    Description: >-
+      allow-all:
+        Viewers can use HTTP or HTTPS.
+      redirect-to-https:
+        If a viewer submits an HTTP request, CloudFront returns an HTTP status
+        code of 301 (Moved Permanently) to the viewer along with the HTTPS URL.
+        The viewer then resubmits the request using the new URL.
+      https-only:
+        If a viewer sends an HTTP request, CloudFront returns an HTTP status
+        code of 403.
+
+  HostedZoneDomainName:
+    Type: String
+    Description: >-
+      The domain name for the the SSL certificate.
+
+  4xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Client-error rate thresold in percentage
+    Default: 3
+
+  5xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Error rate thresold in percentage
+    Default: 1
+
+  WebACLId:
+    Type: String
+    Description: >
+      By default the USA Embargo WebACL will be applied
+    Default: ""
+
+  AdditionalAliases:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      List of domains to be used as aliases for this bucket CDN. Any aliases
+      added here will need to have their own route53 records created.
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+  HasS3CanonicalUserId: !Not [!Equals [!Ref S3CanonicalUserId, ""]]
+  IsS3Origin: !Equals [!Ref OriginType, "s3"]
+  IsCustomOrigin: !Equals [!Ref OriginType, "custom"]
+  HasWebACLId:
+    !Not [!Equals [!Ref WebACLId, ""]]
+  EnableUsaEmbargoWebACL: !Not [!Condition HasWebACLId]
+  HasAdditionalAliases: !Not [!Equals [!Join [",", !Ref AdditionalAliases], ""]]
+
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+
+Mappings:
+  CertsByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+  Inventory:
+    AllowedMethods:
+      ALL: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+      DEFAULT: [GET, HEAD, OPTIONS]
+      LIMITED: [GET, HEAD]
+    CachedMethods:
+      DEFAULT: [HEAD, GET]
+      ALL: [GET, HEAD, OPTIONS]
+    Headers:
+      CORS: >-
+        Origin,Access-Control-Request-Headers,Access-Control-Request-Method
+
+Resources:
+  DistributionAlias:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/route53/alias.yml
+      Parameters:
+        Name: !If # assumes we never use env prefix in prod
+          - IsEnvProd
+          - !Ref Name
+          - !Sub ${EnvironmentName}-${Name}
+        DistributionDomainName: !GetAtt Distribution.DomainName
+        HostedZoneName: !Ref HostedZoneDomainName
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Ref "AWS::StackName"
+        Enabled: true
+        HttpVersion: http2
+        Aliases: !Split
+          - ","
+          - !Join
+            - ","
+            - - !If
+                - IsEnvProd
+                - !Sub ${Name}.${HostedZoneDomainName}
+                - !Sub ${EnvironmentName}-${Name}.${HostedZoneDomainName}
+              - !If
+                - HasAdditionalAliases
+                - !Join [",", !Ref AdditionalAliases]
+                - !Ref AWS::NoValue
+        PriceClass: !If
+          - IsEnvProd
+          - PriceClass_All
+          - PriceClass_100
+        WebACLId: !If
+          - EnableUsaEmbargoWebACL
+          - !ImportValue WafV2CloudfrontWebAclUsaEmbargoArn
+          - !Ref 'AWS::NoValue'
+        # CustomErrorResponses:
+        #  - ErrorCachingMinTTL: 10
+        #    ErrorCode: 403
+        #  - ErrorCachingMinTTL: 10
+        #    ErrorCode: 404
+        #    # ResponsePagePath: String
+        DefaultCacheBehavior:
+          AllowedMethods:
+            !FindInMap [Inventory, AllowedMethods, !Ref AllowedMethods]
+          CachedMethods:
+            !FindInMap [Inventory, CachedMethods, !Ref CachedMethods]
+          DefaultTTL: !Ref DefaultTTL
+          MaxTTL: !Ref MaxTTL
+          MinTTL: !Ref MinTTL
+          ForwardedValues:
+            QueryString: !Ref ForwardQueryStringValues
+            Headers: !Split
+              - ","
+              - !Join
+                - ","
+                - - Host
+                  - !FindInMap [Inventory, Headers, CORS]
+          TargetOriginId: default
+          ViewerProtocolPolicy: !Ref ViewerProtocolPolicy
+          Compress: true
+
+        Origins:
+          - Id: default
+            DomainName: !Ref OriginDomainName
+            OriginPath: !Ref OriginPath
+            CustomOriginConfig: !If
+              - IsCustomOrigin
+              - OriginProtocolPolicy: !Ref OriginProtocolPolicy
+                OriginKeepaliveTimeout: !Ref OriginKeepaliveTimeout
+                OriginReadTimeout: !Ref OriginReadTimeout
+              - !Ref AWS::NoValue
+            S3OriginConfig: !If
+              - IsS3Origin
+              - OriginAccessIdentity: !If
+                  - HasS3CanonicalUserId
+                  - !Ref S3CanonicalUserId
+                  - !Ref AWS::NoValue
+              - !Ref AWS::NoValue
+
+        ViewerCertificate:
+          AcmCertificateArn:
+            !FindInMap [CertsByDomain, !Ref HostedZoneDomainName, Arn]
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1
+
+  4xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 4xxErrorRate
+        Threshold: !Ref 4xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref Distribution
+        VerticalName: !Ref VerticalName
+
+  5xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 5xxErrorRate
+        Threshold: !Ref 5xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref Distribution
+        VerticalName: !Ref VerticalName
+# vim: set ft=yaml.cloudformation :

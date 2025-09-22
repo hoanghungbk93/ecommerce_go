@@ -1,0 +1,177 @@
+Description: Creates shared ECR repositories for the org.
+
+Parameters:
+
+  CloudFormationBaseUrl:
+    Type: String
+    Default: https://s3.amazonaws.com/cloudformation.adela.it/templates
+    AllowedValues:
+      - "https://s3.amazonaws.com/cloudformation.adela.it/templates"
+
+  GitRef:
+    Type: String
+    AllowedPattern: "^(master|[a-z0-9]{40})$"
+    Default: '{{SHARED_TEMPLATE_GITSHA}}'
+
+Resources:
+
+#  Tyk:
+#    Type: AWS::CloudFormation::Stack
+#    Properties:
+#      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+#      Parameters:
+#        Name: tyk
+#
+#  Sigil:
+#    Type: AWS::CloudFormation::Stack
+#    Properties:
+#      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+#      Parameters:
+#        Name: sigil
+
+  CollabsCollaborationService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collaboration-service
+
+  CollabsCastingService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: casting-service
+
+  CollabsNetsuiteService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-netsuite-service
+
+  CollabsInfluencerUI:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-influencer-ui
+
+  CollabsBrandUI:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-brand-ui
+
+  CollabsRDUI:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-rd-ui
+
+  CollabsEventService:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-event-service
+
+  DevopsBuildUtils:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: devops-build-utils
+
+  Rsthecom:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: rsthecom
+
+  DevopsTools:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: devops-tools
+
+  DockerHostStressTester:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: docker-host-stress-tester
+
+  CollabsEmailerBase:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-base
+
+  CollabsEmailerCollaborationOffer:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-collaboration-offer
+
+  CollabsEmailer:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer
+
+  CollabsEmailerDispatcher:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-dispatcher
+
+  CollabsEmailerObligationSubmitted:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-obligation-submitted
+
+  CollabsEmailerUnreadNotifications:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-unread-notifications
+
+  CollabsEmailerUpcomingDeadline:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-upcoming-deadline
+
+  CollabsEmailerOffersSummary:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: collabs-emailer-offers-summary
+
+  ToolsLegacyRsWeb:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: legacy-rs-web
+
+  ToolsLegacyRsWebproxy:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/ecr/repository.yml
+      Parameters:
+        Name: legacy-rs-webproxy

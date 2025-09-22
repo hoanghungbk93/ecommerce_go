@@ -1,0 +1,346 @@
+Description: Creates a classic load balancer.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the load balancer. The vertical name is
+      required to be lowercase as it is used in the naming convention of resources
+      created by this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  LoadBalancerName:
+    Description: The name of the load balancer.
+    Type: String
+
+  Scheme:
+    Description: The scheme of the ELB.
+    Type: String
+    AllowedValues:
+      - internal
+      - internet-facing
+    Default: internal
+
+  HealthCheckPath:
+    Description: The route to the health check endpoint.
+    Type: String
+    Default: HTTP:80/healthcheck
+
+  ApplicationPort:
+    Description: The TCP port to listen to and forward to the application
+    Type: Number
+    Default: -1
+
+  ApplicationHttpPort:
+    Description: The HTTP port to listen to that will map to port 80
+    Type: Number
+    Default: -1
+
+  CreateDNS:
+    Description: Whether or not a DNS alias should be created for the ELB.
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+
+  DNSName:
+    Description: >
+      The name of the alias created for the ELB. This parameter will be ignored if
+      CreateDNS is false. If not specified, the name of the load balancer is be used.
+    Type: String
+    Default: ""
+
+  DomainName:
+    Description: >
+      The domain name of the route 53 record to be created for this load
+      balancer. Also used for SSL if this is a public domain.
+    Type: String
+
+  IdleTimeout:
+    Type: Number
+    Description: >
+      The time (in seconds) that a connection to the load balancer can remain
+      idle, which means no data is sent over the connection. After the specified
+      time, the load balancer closes the connection.
+    MinValue: 10
+    Default: 60
+
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+
+Mappings:
+  CertArnByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+
+Conditions:
+
+  IsPrivate: !Equals [!Ref Scheme, internal]
+  IsPublic: !Equals [!Ref Scheme, internet-facing]
+  HasPrivateDNS: !And [!Condition IsPrivate, !Equals [!Ref CreateDNS, true]]
+  HasPublicDNS: !And [!Condition IsPublic, !Equals [!Ref CreateDNS, true]]
+  HasCustomDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  HasApplicationHttpPort: !Not [!Equals [!Ref ApplicationHttpPort, -1]]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: IsPublic
+    Properties:
+      GroupDescription: !Sub Provides public access over 80/443 to the ${Namespace}-${LoadBalancerName} load balancer.
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Condition: IsPublic
+    Properties:
+      ToPort: 65535
+      FromPort: 0
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: -1
+
+  SecurityGroupIngressHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsPublic
+    Properties:
+      ToPort: 80
+      FromPort: 80
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+
+  SecurityGroupIngressHTTPS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsPublic
+    Properties:
+      ToPort: 443
+      FromPort: 443
+      CidrIp: 0.0.0.0/0
+      GroupId: !Ref LoadBalancerSecurityGroup
+      IpProtocol: tcp
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Condition: IsPrivate
+    Properties:
+      LoadBalancerName: !Sub ${Namespace}-${LoadBalancerName}
+      Scheme: !Ref Scheme
+      CrossZone: true
+      ConnectionSettings:
+        IdleTimeout: !Ref IdleTimeout
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+      SecurityGroups:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+      Listeners:
+        - LoadBalancerPort: 80
+          InstancePort: 80
+          Protocol: HTTP
+        - LoadBalancerPort: !Ref ApplicationPort
+          InstancePort: !Ref ApplicationPort
+          Protocol: tcp
+        - !If
+          - HasApplicationHttpPort
+          - LoadBalancerPort: !Ref ApplicationHttpPort
+            InstancePort: 80
+            Protocol: HTTP
+          - !Ref AWS::NoValue
+      HealthCheck:
+        Target: !Ref HealthCheckPath
+        HealthyThreshold: '4'
+        UnhealthyThreshold: '2'
+        Interval: '30'
+        Timeout: '5'
+
+  ServiceDiscoveryService:
+    Type: AWS::ServiceDiscovery::Service
+    Condition: IsPrivate
+    Properties:
+      DnsConfig:
+        DnsRecords:
+          - Type: A
+            TTL: '60'
+        RoutingPolicy: WEIGHTED
+      Name: !Join
+        - "-"
+        - - !If [HasSubEnvironment, !Ref SubEnvironmentName, !Ref AWS::NoValue]
+          - !Sub ${LoadBalancerName}.elb
+      NamespaceId:
+        Fn::ImportValue: !Sub >-
+          ${EnvironmentName}:stacksets:v2:env:service-discovery:private-dns-namespace:env:id
+
+  ServiceDiscoveryInstance:
+    Type: AWS::ServiceDiscovery::Instance
+    Condition: IsPrivate
+    Properties:
+      InstanceAttributes:
+        AWS_ALIAS_DNS_NAME: !GetAtt LoadBalancer.DNSName
+      ServiceId: !Ref ServiceDiscoveryService
+
+  PublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Condition: IsPublic
+    Properties:
+      LoadBalancerName: !Sub ${Namespace}-${LoadBalancerName}
+      Scheme: !Ref Scheme
+      CrossZone: true
+      ConnectionSettings:
+        IdleTimeout: !Ref IdleTimeout
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+      SecurityGroups:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+        - !Ref LoadBalancerSecurityGroup
+      Listeners:
+        - LoadBalancerPort: 80
+          InstancePort: 80
+          Protocol: HTTP
+        - LoadBalancerPort: !Ref ApplicationPort
+          InstancePort: !Ref ApplicationPort
+          Protocol: tcp
+        - LoadBalancerPort: 443
+          InstancePort: 80
+          Protocol: HTTPS
+          SSLCertificateId: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+        - !If
+          - HasApplicationHttpPort
+          - LoadBalancerPort: !Ref ApplicationHttpPort
+            InstancePort: 80
+            Protocol: HTTP
+          - !Ref AWS::NoValue
+      HealthCheck:
+        Target: !Ref HealthCheckPath
+        HealthyThreshold: '4'
+        UnhealthyThreshold: '2'
+        Interval: '30'
+        Timeout: '5'
+
+  PublicRecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPublicDNS
+    Properties:
+      Comment: !Sub DNS for external communication to the ${PublicLoadBalancer} ELB.
+      HostedZoneName: !Join
+        - ""
+        - - !Ref DomainName
+          - .
+      Name: !Join
+        - ""
+        - - !If [HasCustomDNSName, !Join ["-", [!Ref Namespace, !Ref DNSName]], !Ref PublicLoadBalancer]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      SetIdentifier: !Ref AWS::StackName
+      Weight: 0
+      AliasTarget:
+        DNSName: !GetAtt PublicLoadBalancer.DNSName
+        HostedZoneId: !GetAtt PublicLoadBalancer.CanonicalHostedZoneNameID
+        EvaluateTargetHealth: true
+
+  PrivateRecordSet:
+    Type: AWS::Route53::RecordSet
+    Condition: HasPrivateDNS
+    Properties:
+      Comment: !Sub DNS for internal communication to the ${LoadBalancer} ELB.
+      HostedZoneName: !Join
+        - ""
+        - - !Ref DomainName
+          - .
+      Name: !Join
+        - ""
+        - - !If [HasCustomDNSName, !Join ["-", [!Ref Namespace, !Ref DNSName]], !Ref LoadBalancer]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      SetIdentifier: !Ref AWS::StackName
+      Weight: 0
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneNameID
+        EvaluateTargetHealth: true
+
+  PublicDNSParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasPublicDNS
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref PublicRecordSet
+
+  PrivateDNSParameter:
+    Type: AWS::SSM::Parameter
+    Condition: HasPrivateDNS
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref PrivateRecordSet
+
+  PortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/load-balancer/${LoadBalancerName}/port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref ApplicationPort
+
+Outputs:
+
+  LoadBalancer:
+    Description: The name of the ELB.
+    Value: !If
+      - IsPrivate
+      - !Ref LoadBalancer
+      - !Ref PublicLoadBalancer
+
+  LoadBalancerHost:
+    Description: The hostname of the ELB.
+    Value: !If
+      - HasPublicDNS
+      - !Ref PublicRecordSet
+      - !If
+        - HasPrivateDNS
+        - !Ref PrivateRecordSet
+        - !If
+          - IsPrivate
+          - !GetAtt LoadBalancer.DNSName
+          - !GetAtt PublicLoadBalancer.DNSName
+
+  Port:
+    Description: The port of the ELB.
+    Value: !Ref ApplicationPort

@@ -1,0 +1,18 @@
+[
+    {
+        "Key": "Owner",
+        "Value": "DevOps Horizontal"
+    },
+    {
+        "Key": "Product",
+        "Value": "eks.rewardstyle.com/devops"
+    },
+    {
+        "Key": "Vertical",
+        "Value": "devops"
+    },
+    {
+        "Key": "Project",
+        "Value": "devops-eks"
+    }
+]

@@ -1,0 +1,106 @@
+[
+  {
+    "ParameterKey": "CloudformationBaseUrl",
+    "ParameterValue": "https://s3.amazonaws.com/ecommerce-cloudformation-templates-142473567235/templates/shared"
+  },
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ImageUrl", 
+    "ParameterValue": "142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app"
+  },
+  {
+    "ParameterKey": "GitSha",
+    "ParameterValue": "latest"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
+    "ParameterKey": "ClusterMinSize",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ClusterMaxSize",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "ClusterDesiredCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "BackendCPU",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "BackendMemoryReservation",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "FrontendCPU",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "FrontendMemoryReservation",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "BackendDesiredCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "FrontendDesiredCount",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "BackendMinCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "BackendMaxCapacity",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "FrontendMinCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "FrontendMaxCapacity",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": "ecommerce-key"
+  },
+  {
+    "ParameterKey": "VerticalName",
+    "ParameterValue": "ecommerce"
+  },
+  {
+    "ParameterKey": "SubEnvironmentName",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "DomainName",
+    "ParameterValue": "dev-ecommerce.itmf.com.vn"
+  },
+  {
+    "ParameterKey": "AlarmTarget",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "TypicalFailureRateThreshold",
+    "ParameterValue": "0"
+  },
+  {
+    "ParameterKey": "StrictFailureRateThreshold",
+    "ParameterValue": "0"
+  },
+  {
+    "ParameterKey": "LatencyAlarmThreshold",
+    "ParameterValue": "0"
+  }
+]

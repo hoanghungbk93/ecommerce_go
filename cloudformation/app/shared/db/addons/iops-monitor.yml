@@ -1,0 +1,240 @@
+Description: Creates an RDS unified IOPS monitor.
+
+Parameters:
+  Instance:
+    Description: The RDS instance DBInstanceIdentifier
+    Type: String
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the RDS instance. This should be lower
+      cased as the vertical name is used in the naming convention of various resources.
+    AllowedPattern: "[a-z0-9-]+"
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  IOPSThreshold:
+    Description: >
+      The number of unified read and write IOPS at which to trigger an alarm.
+    Default: 0
+    AllowedPattern: "[0-9]+"
+    Type: String
+
+Conditions:
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  IOPSThresholdSpecified: !Not [!Equals [!Ref IOPSThreshold, 0]]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  IOPSLambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowRdsIopsReadAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds:DescribeDBInstances
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:GetMetricStatistics
+                Resource:
+                  - "*"
+
+  IOPSLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: !Sub Monitors rds instance ${Instance} for unified read and write IOPS.
+      Role: !GetAtt IOPSLambdaFunctionRole.Arn
+      Handler: index.handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 275
+      Environment:
+        Variables:
+          DBInstanceIdentifier: !Ref Instance
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+          from collections import defaultdict
+          from datetime import datetime, timedelta
+          id = os.environ['DBInstanceIdentifier']
+          if len(id) == 0:
+              raise Exception()
+          stat = 'Average'
+          namespace = 'CUSTOM/RDS'
+          client = boto3.client('cloudwatch')
+          def get_metrics(start_time, end_time, *metrics):
+              kwargs = {
+                'MetricDataQueries': [
+                  {
+                    'Id': 'm_'+metric, # id must match regex: ^[a-z][a-zA-Z0-9_]*$
+                    'MetricStat': {
+                      'Metric': {
+                        'Namespace': 'AWS/RDS',
+                        'MetricName': metric,
+                        'Dimensions': [{ 'Name': 'DBInstanceIdentifier', 'Value': id }],
+                      },
+                      'Period': 60,
+                      'Stat': stat,
+                    },
+                  } for metric in metrics
+                ],
+                'StartTime': start_time,
+                'EndTime': end_time,
+              }
+              nextToken = None
+              seen_keys = set()
+              results = defaultdict(lambda: [])
+              while True:
+                # client.get_paginator('get_metric_data') errors in aws as of 2018-01-30
+                page = client.get_metric_data(**kwargs)
+                for m in page.get('MetricDataResults', []):
+                  if m['StatusCode'] != 'Complete':
+                    continue
+                  i = 0
+                  for t in m['Timestamps']:
+                    mid = m['Id']
+                    minute = timestampToMinute(t)
+                    key = f"{mid} - {minute.isoformat()}"
+                    if key in seen_keys:
+                      raise Exception("Duplicate results from cloudwatch")
+                    seen_keys.add(key)
+                    results[mid].append({'Timestamp':minute, stat:m['Values'][i]})
+                    i += 1
+                nextToken = page.get('NextToken')
+                if not nextToken:
+                  break
+                kwargs['NextToken'] = nextToken
+              return list(results.values())
+          def timestampToMinute(t):
+            return t - timedelta(seconds=t.second,microseconds=t.microsecond)
+          def unionize_iops(*raw_iops_sets):
+              iops = defaultdict(lambda: {'sum': 0, 'count': 0})
+              for raw_iops in raw_iops_sets:
+                for i in raw_iops:
+                    t = i['Timestamp']
+                    iop = iops[t.isoformat()]
+                    iop['sum'] += i[stat]
+                    iop['count'] += 1
+                    if not iop.get('time'):
+                      iop['time'] = t
+              return [ v for v in iops.values() if v['count'] > 1 ]
+          def get_total_iops():
+              now = datetime.now()
+              startTime = timestampToMinute(now) - timedelta(minutes=15)
+              prev_stats = client.get_metric_statistics(
+                  Namespace=namespace,
+                  MetricName='TotalIOPS',
+                  Dimensions=[{ 'Name': 'DBInstanceIdentifier', 'Value': id }],
+                  StartTime=startTime,
+                  EndTime=now,
+                  Period=60,
+                  Statistics=[stat],
+              ).get('Datapoints', [])
+              prev_stats = sorted([ x['Timestamp'] for x in prev_stats ])
+              if prev_stats:
+                startTime = prev_stats[-1] + timedelta(minutes=1)
+              raw_iops_sets = get_metrics(startTime, now, 'ReadIOPS', 'WriteIOPS')
+              return unionize_iops(*raw_iops_sets)
+          def publish_total_iops(iops):
+              client.put_metric_data(
+                  Namespace=namespace,
+                  MetricData=[{
+                      'MetricName': 'TotalIOPS',
+                      'Timestamp': iop['time'],
+                      'Value': iop['sum'],
+                      'Dimensions':[{
+                          'Name': 'DBInstanceIdentifier',
+                          'Value': id,
+                      }],
+                  } for iop in iops ]
+              )
+          def handler(*args):
+              iops = get_total_iops()
+              if iops:
+                  publish_total_iops(iops)
+      Tags:
+        - Key: Name
+          Value: !Sub ${Instance}-RdsIOPSMonitor
+
+  IOPSLambdaScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join
+        - " "
+        - - "Schedule for Lambda Function"
+          - !GetAtt IOPSLambdaFunction.Arn
+      ScheduleExpression: "rate(5 minutes)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt IOPSLambdaFunction.Arn
+          Id: !Select [2, !Split [/, !Ref 'AWS::StackId']]
+
+  IOPSLambdaSchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IOPSLambdaFunction
+      SourceArn: !GetAtt IOPSLambdaScheduleRule.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  IOPSAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: IOPSThresholdSpecified
+    Properties:
+      AlarmDescription: !Sub "critical: rds: ${Instance} instance read+write IOPS are too high."
+      Namespace: CUSTOM/RDS
+      MetricName: TotalIOPS
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref IOPSThreshold
+      Period: 300
+      EvaluationPeriods: 1
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref Instance

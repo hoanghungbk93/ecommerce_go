@@ -1,0 +1,18 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+structlog = "==22.1.0"
+python-json-logger = "==2.0.4"
+PyMySQL = "==1.0.2"
+requests = "*"
+boto3 = "==1.26.137"
+
+[dev-packages]
+pytest = "*"
+moto = "*"
+
+[requires]
+python_version = "3.9"

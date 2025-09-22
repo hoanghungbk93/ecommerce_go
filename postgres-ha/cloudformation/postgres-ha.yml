@@ -1,0 +1,327 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'PostgreSQL HA Cluster with Patroni, etcd, and HAProxy'
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+
+  VpcCIDR:
+    Description: CIDR block for VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  SSHLocation:
+    Description: IP address range that can SSH to the EC2 instances
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x
+
+Mappings:
+  RegionMap:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-west-2:
+      AMI: ami-0c2d3e23c8b8c8c7e
+    eu-west-1:
+      AMI: ami-0c02fb55956c7d316
+    ap-southeast-1:
+      AMI: ami-0ae452be23f2d0353
+
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-VPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-IGW
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Public-Subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Public-Subnet-2
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [2, !GetAZs '']
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Public-Subnet-3
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Public-Routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet3
+
+  PostgreSQLSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: PostgreSQL-HA-SecurityGroup
+      GroupDescription: Security group for PostgreSQL HA cluster
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Ref VpcCIDR
+        - IpProtocol: tcp
+          FromPort: 8008
+          ToPort: 8008
+          CidrIp: !Ref VpcCIDR
+        - IpProtocol: tcp
+          FromPort: 2379
+          ToPort: 2380
+          CidrIp: !Ref VpcCIDR
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-SecurityGroup
+
+  HAProxySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: HAProxy-SecurityGroup
+      GroupDescription: Security group for HAProxy load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SSHLocation
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 5433
+          ToPort: 5433
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8404
+          ToPort: 8404
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 2379
+          ToPort: 2380
+          CidrIp: !Ref VpcCIDR
+      Tags:
+        - Key: Name
+          Value: HAProxy-SecurityGroup
+
+  PostgreSQLNode1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref PostgreSQLSecurityGroup
+      PrivateIpAddress: 10.0.1.10
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y python3 python3-pip curl wget
+          pip3 install --upgrade pip
+          apt-get install -y software-properties-common
+          useradd -m -s /bin/bash ansible || true
+          usermod -aG sudo ansible
+          echo "ansible ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "NODE_TYPE=postgres" >> /etc/environment
+          echo "NODE_ID=1" >> /etc/environment
+          touch /var/log/user_data_complete
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Node1
+        - Key: Role
+          Value: postgres
+
+  PostgreSQLNode2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds:
+        - !Ref PostgreSQLSecurityGroup
+      PrivateIpAddress: 10.0.2.10
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y python3 python3-pip curl wget
+          pip3 install --upgrade pip
+          apt-get install -y software-properties-common
+          useradd -m -s /bin/bash ansible || true
+          usermod -aG sudo ansible
+          echo "ansible ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "NODE_TYPE=postgres" >> /etc/environment
+          echo "NODE_ID=2" >> /etc/environment
+          touch /var/log/user_data_complete
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-Node2
+        - Key: Role
+          Value: postgres
+
+  HAProxyNode:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', AMI]
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet3
+      SecurityGroupIds:
+        - !Ref HAProxySecurityGroup
+      PrivateIpAddress: 10.0.3.10
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y python3 python3-pip curl wget
+          pip3 install --upgrade pip
+          apt-get install -y software-properties-common
+          useradd -m -s /bin/bash ansible || true
+          usermod -aG sudo ansible
+          echo "ansible ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+          echo "NODE_TYPE=haproxy" >> /etc/environment
+          echo "NODE_ID=3" >> /etc/environment
+          touch /var/log/user_data_complete
+      Tags:
+        - Key: Name
+          Value: PostgreSQL-HA-HAProxy
+        - Key: Role
+          Value: haproxy
+
+Outputs:
+  HAProxyPublicIP:
+    Description: Public IP of HAProxy node
+    Value: !GetAtt HAProxyNode.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-HAProxyPublicIP
+
+  HAProxyPublicDNS:
+    Description: Public DNS of HAProxy node
+    Value: !GetAtt HAProxyNode.PublicDnsName
+    Export:
+      Name: !Sub ${AWS::StackName}-HAProxyPublicDNS
+
+  PostgreSQLNode1PublicIP:
+    Description: Public IP of PostgreSQL node 1
+    Value: !GetAtt PostgreSQLNode1.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgreSQLNode1PublicIP
+
+  PostgreSQLNode2PublicIP:
+    Description: Public IP of PostgreSQL node 2
+    Value: !GetAtt PostgreSQLNode2.PublicIp
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgreSQLNode2PublicIP
+
+  PostgreSQLConnectionString:
+    Description: Connection string for applications to connect to PostgreSQL HA cluster
+    Value: !Sub postgresql://postgres:secret@${HAProxyNode.PublicIp}:5432/odoo
+    Export:
+      Name: !Sub ${AWS::StackName}-PostgreSQLConnectionString
+
+  AdminConnectionInfo:
+    Description: SSH connection information for administrators
+    Value: !Sub |
+      HAProxy Node: ssh -i ~/.ssh/${KeyName}.pem ubuntu@${HAProxyNode.PublicIp}
+      PostgreSQL Node 1: ssh -i ~/.ssh/${KeyName}.pem ubuntu@${PostgreSQLNode1.PublicIp}
+      PostgreSQL Node 2: ssh -i ~/.ssh/${KeyName}.pem ubuntu@${PostgreSQLNode2.PublicIp}
+      HAProxy Stats: http://${HAProxyNode.PublicIp}:8404/stats
+
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${AWS::StackName}-VPCID

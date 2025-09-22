@@ -1,0 +1,216 @@
+Description: Creates an ECS service to run Postgres DataDog agent on a specified an ECS cluster.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment. All metrics sent to DataDog will be tagged with the environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: The name of the vertical which will be used for tagging the metrics and logs sent to DataDog.
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  ClusterName:
+    Description: The name of the cluster that the agent should run on.
+    Type: String
+
+  AgentVersion:
+    Description: The version of the DataDog agent to run.
+    Type: String
+    Default: latest
+
+  APIKey:
+    Description: The DataDog API key.
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /global/datadog/api-key
+
+  CPU:
+    Description: The number of CPU units to reserve for the agent's container.
+    Type: Number
+    Default: 100
+
+  Memory:
+    Description: >
+      The max number of MiB that each task may consume (hard limit).
+      You must specify one or both of Memory and MemoryReservation.
+    Type: Number
+    Default: 1024
+
+  ServiceName:
+    Type: String
+    Description: >-
+      The name of the project or service that this datadog agent is for.
+      Setting this enables service discovery for the datadog agent and this is
+      used as the prefix of the service discoverable domain.
+    Default: ''
+
+  DdPgHostSsmPath:
+    Description: SSM path to Postgres host url to enable enhanced monitoring.
+    Type: String
+    Default: ""
+
+  DdPgPortSsmPath:
+    Description: SSM path to Postgres host port to enable enhanced monitoring.
+    Type: String
+    Default: ""
+
+  DdPgUserSsmPath:
+    Description: SSM path to Postgres username to enable enhanced monitoring.
+    Type: String
+    Default: ""
+
+  DdPgPasswordSsmPath:
+    Description: SSM path to Postgres password to enable enhanced monitoring. Password must be a secure string.
+    Type: String
+    Default: ""
+
+  DdPgReplicaHostSsmPath:
+    Description: SSM path to Postgres Replica host url to enable enhanced monitoring.
+    Type: String
+    Default: ""
+
+Conditions:
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasReplica: !Not [!Equals [!Ref DdPgReplicaHostSsmPath, "" ]]
+
+Resources:
+
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ClusterName
+      TaskDefinition: !Ref TaskDefinition
+      SchedulingStrategy: REPLICA
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ServiceName}-cluster--datadog-pg-eh-mon-agent-task
+      TaskRoleArn: !GetAtt DefaultTaskRole.Arn
+      Volumes:
+        - Host:
+            SourcePath: /var/run/docker.sock
+          Name: docker_sock
+        - Host:
+            SourcePath: /proc/
+          Name: proc
+        - Host:
+            SourcePath: /opt/datadog-agent/run
+          Name: pointdir
+        - Host:
+            SourcePath: /cgroup/
+          Name: cgroup
+      ContainerDefinitions:
+        - Name: datadog-pg-enhanced-monitoring-agent
+          Image: !Sub datadog/agent:${AgentVersion}
+          Cpu: !Ref CPU
+          Memory: !Ref Memory
+          Essential: true
+          MountPoints:
+            - ContainerPath: /var/run/docker.sock
+              SourceVolume: docker_sock
+              ReadOnly: true
+            - ContainerPath: /host/sys/fs/cgroup
+              SourceVolume: cgroup
+              ReadOnly: true
+            - ContainerPath: /host/proc
+              SourceVolume: proc
+              ReadOnly: true
+          LinuxParameters:
+            InitProcessEnabled: true
+          LogConfiguration:
+            LogDriver: json-file
+            Options:
+              max-size: "10m"
+              max-file: "3"
+          DockerLabels:
+            com.datadoghq.ad.check_names: !If [HasReplica, '["postgres","postgres"]', '["postgres"]']
+            com.datadoghq.ad.init_configs: !If [HasReplica, "[{},{}]", "[{}]"]
+            com.datadoghq.ad.instances: !If [HasReplica, '[{"dbm":true, "host": "%%env_DB_HOST_URL%%", "port": "%%env_DB_PORT%%", "username": "%%env_DB_USERNAME%%", "password": "%%env_DB_PASSWORD%%", "query_timeout": 0},{"dbm":true, "host": "%%env_DB_REPLICA_HOST_URL%%", "port": "%%env_DB_PORT%%", "username": "%%env_DB_USERNAME%%", "password": "%%env_DB_PASSWORD%%", "query_timeout": 0}]', '[{"dbm":true, "host": "%%env_DB_HOST_URL%%", "port": "%%env_DB_PORT%%", "username": "%%env_DB_USERNAME%%", "password": "%%env_DB_PASSWORD%%", "query_timeout": 0}]']
+          Secrets:
+            - Name: DB_PASSWORD
+              ValueFrom: !Sub >-
+                arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${DdPgPasswordSsmPath}
+          Environment:
+            - Name: ENV
+              Value: !Ref Namespace
+            - Name: SD_BACKEND
+              Value: docker
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: DD_API_KEY
+              Value: !Ref APIKey
+            - Name: DD_CONTAINER_EXCLUDE_LOGS
+              Value: "image:datadog/agent image:amazon/amazon-ecs-agent"
+            - Name: DB_HOST_URL
+              Value: !Sub '{{resolve:ssm:${DdPgHostSsmPath}}}'
+            - Name: DB_PORT
+              Value: !Sub '{{resolve:ssm:${DdPgPortSsmPath}}}'
+            - Name: DB_USERNAME
+              Value: !Sub '{{resolve:ssm:${DdPgUserSsmPath}}}'
+            - !If
+              - HasReplica
+              - Name: DB_REPLICA_HOST_URL
+                Value: !Sub '{{resolve:ssm:${DdPgReplicaHostSsmPath}}}'
+              - !Ref AWS::NoValue
+            - Name: DD_TAGS
+              Value: !Join
+                - " "
+                - - !Sub env:${Namespace}
+                  - !Sub cluster:${ClusterName}
+                  - !Sub vertical:${VerticalName}
+      ExecutionRoleArn: !GetAtt DefaultTaskRole.Arn
+
+  DefaultTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+      Policies:
+        - PolicyName: datadog-policies
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RegisterContainerInstance
+                  - ecs:DeregisterContainerInstance
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Submit*
+                  - ecs:Poll
+                  - ecs:StartTask
+                  - ecs:StartTelemetrySession
+                  - ssm:GetParameters
+                Resource:
+                  - "*"
+
+Outputs:
+
+  TaskDefinitionArn:
+    Description: The ARN of the task definition.
+    Value: !Ref TaskDefinition
+
+  TaskRoleArn:
+    Description: The ARN of the task's role.
+    Value: !GetAtt DefaultTaskRole.Arn

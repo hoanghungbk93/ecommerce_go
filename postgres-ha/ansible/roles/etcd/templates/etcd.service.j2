@@ -1,0 +1,20 @@
+[Unit]
+Description=etcd
+Documentation=https://github.com/etcd-io/etcd
+Conflicts=etcd.service
+Conflicts=etcd2.service
+
+[Service]
+Type=notify
+Restart=always
+RestartSec=5s
+LimitNOFILE=40000
+TimeoutStartSec=0
+
+User=etcd
+Group=etcd
+
+ExecStart=/usr/local/bin/etcd --config-file /etc/etcd/etcd.conf.yml
+
+[Install]
+WantedBy=multi-user.target

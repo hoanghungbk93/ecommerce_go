@@ -1,0 +1,34 @@
+Description: Creates instance ssm params needed for datadog enhanced database monitoring.
+Parameters:
+  Namespace:
+    Description: The name of the target environment.
+    Type: String
+  ClusterName:
+    Description: The name of the cluster.
+    Type: String
+  Host:
+    Description: Instance host address.
+    Type: String
+  Port:
+    Description: Instance port.
+    Type: String
+  Role:
+    Type: String
+    AllowedValues: ["primary", "replica"]
+
+Resources:
+  InstanceHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/rds/${ClusterName}/datadog-monitoring/${Role}-instance-host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref Host
+
+  InstancePortParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/rds/${ClusterName}/datadog-monitoring/${Role}-instance-port
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref Port

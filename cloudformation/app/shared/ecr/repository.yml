@@ -1,0 +1,45 @@
+---
+Description: Creates ECR repositories for all verticals.
+
+Parameters:
+
+  Name:
+    Type: String
+    Description: The name of the repository
+
+  AllowedPullVerticalIds:
+    Type: AWS::SSM::Parameter::Value<CommaDelimitedList>
+    Default: /global/verticals/root-account-arns
+
+  AllowedPushVerticalIds:
+    Type: AWS::SSM::Parameter::Value<CommaDelimitedList>
+    Default: /global/verticals/root-account-arns
+
+Resources:
+
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref Name
+      RepositoryPolicyText:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPull
+            Effect: Allow
+            Principal:
+              AWS: !Ref AllowedPullVerticalIds
+            Action:
+              - ecr:Get*
+              - ecr:List*
+              - ecr:Describe*
+              - ecr:BatchGet*
+              - ecr:BatchCheck*
+          - Sid: AllowPush
+            Effect: Allow
+            Principal:
+              AWS: !Ref AllowedPushVerticalIds
+            Action:
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage

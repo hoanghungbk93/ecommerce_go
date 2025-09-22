@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Simple RDS PostgreSQL database for development
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical
+    Type: String
+    Default: ecommerce
+
+  DatabaseName:
+    Description: The name of the database
+    Type: String
+
+  InstanceClass:
+    Description: The RDS instance class
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium]
+
+  Engine:
+    Description: The database engine
+    Type: String
+    Default: postgres
+    AllowedValues: [postgres, mysql]
+
+  RootPassword:
+    Description: The root user's password
+    Type: String
+    NoEcho: true
+    Default: TempPassword123!
+
+  AllocatedStorage:
+    Description: The allocated storage size in GB
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 100
+
+Mappings:
+  EngineMap:
+    postgres:
+      Engine: postgres
+      EngineVersion: '13.7'
+      Port: 5432
+      MasterUsername: postgres
+    mysql:
+      Engine: mysql
+      EngineVersion: '8.0.28'
+      Port: 3306
+      MasterUsername: root
+
+Resources:
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnet group for ${EnvironmentName}-${VerticalName} RDS database
+      SubnetIds: !Split
+        - ","
+        - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${VerticalName}-db-subnet-group
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub Security group for ${EnvironmentName}-${VerticalName} RDS database
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:vpc-id
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !FindInMap [EngineMap, !Ref Engine, Port]
+          ToPort: !FindInMap [EngineMap, !Ref Engine, Port]
+          SourceSecurityGroupId:
+            Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+          Description: Allow database access from default security group
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${VerticalName}-db-sg
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  Database:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub ${EnvironmentName}-${VerticalName}-db
+      DBName: !Ref DatabaseName
+      Engine: !FindInMap [EngineMap, !Ref Engine, Engine]
+      EngineVersion: !FindInMap [EngineMap, !Ref Engine, EngineVersion]
+      DBInstanceClass: !Ref InstanceClass
+      AllocatedStorage: !Ref AllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: false
+      MasterUsername: !FindInMap [EngineMap, !Ref Engine, MasterUsername]
+      MasterUserPassword: !Ref RootPassword
+      Port: !FindInMap [EngineMap, !Ref Engine, Port]
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      BackupRetentionPeriod: 1
+      MultiAZ: false
+      PubliclyAccessible: false
+      DeleteAutomatedBackups: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${VerticalName}-database
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Vertical
+          Value: !Ref VerticalName
+
+Outputs:
+  Host:
+    Description: RDS instance hostname
+    Value: !GetAtt Database.Endpoint.Address
+
+  Port:
+    Description: RDS instance port
+    Value: !GetAtt Database.Endpoint.Port
+
+  DatabaseArn:
+    Description: RDS instance ARN
+    Value: !Sub arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${Database}
+
+  DatabaseName:
+    Description: Database name
+    Value: !Ref DatabaseName
+
+  ConnectionString:
+    Description: Database connection string (without password)
+    Value: !Sub 
+      - "${engine}://${username}@${endpoint}:${port}/${dbname}"
+      - engine: !FindInMap [EngineMap, !Ref Engine, Engine]
+        username: !FindInMap [EngineMap, !Ref Engine, MasterUsername]
+        endpoint: !GetAtt Database.Endpoint.Address
+        port: !GetAtt Database.Endpoint.Port
+        dbname: !Ref DatabaseName

@@ -1,0 +1,153 @@
+---
+Parameters:
+  ServiceName:
+    Type: String
+    Description: >-
+      The full name of the ECS service.
+
+  ClusterName:
+    Type: String
+
+  MinCapacity:
+    Description: >-
+      The minimum number of tasks that can be running in the service.
+      There should always be at least 2 tasks in production for redundancy.
+    Type: Number
+    Default: 2
+
+  MaxCapacity:
+    Description: >-
+      The maximum number of tasks that can be running in the service.
+    Type: Number
+    Default: 10
+
+  LowCPUThreshold:
+    Type: Number
+    MinValue: 1
+    Default: 20
+
+  HighCPUThreshold:
+    Type: Number
+    MinValue: 1
+    Default: 70
+
+  EvaluationPeriods:
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  AlarmPeriod:
+    Type: Number
+    Default: 60
+    MinValue: 60
+
+Resources:
+
+  ScalableTargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+
+  ScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      ServiceNamespace: ecs
+      ScalableDimension: ecs:service:DesiredCount
+      ResourceId: !Sub service/${ClusterName}/${ServiceName}
+      MinCapacity: !Ref MinCapacity
+      MaxCapacity: !Ref MaxCapacity
+      RoleARN: !GetAtt ScalableTargetRole.Arn
+
+  # Create scaling policies for the service
+  ScaleDownPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: ScalableTarget
+    Properties:
+      PolicyName: !Sub ${ServiceName}-scale-down-policy
+      PolicyType: StepScaling
+      ResourceId: !Sub service/${ClusterName}/${ServiceName}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+        MetricAggregationType: Average
+        Cooldown: 60
+
+  ScaleUpPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: ScalableTarget
+    Properties:
+      PolicyName: !Sub ${ServiceName}-scale-up-policy
+      PolicyType: StepScaling
+      ResourceId: !Sub service/${ClusterName}/${ServiceName}
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            MetricIntervalUpperBound: 15
+            ScalingAdjustment: 1
+          - MetricIntervalLowerBound: 15
+            MetricIntervalUpperBound: 25
+            ScalingAdjustment: 2
+          - MetricIntervalLowerBound: 25
+            ScalingAdjustment: 3
+        MetricAggregationType: Average
+        Cooldown: 60
+
+  # Create alarms to trigger these policies
+  LowCpuUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ServiceName}-ecs-service-low-cpu
+      AlarmDescription: !Sub >-
+        Low CPU utilization for service ${ServiceName}
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ServiceName
+          Value: !Sub ${ServiceName}
+        - Name: ClusterName
+          Value: !Ref ClusterName
+      Statistic: Average
+      Period: !Ref AlarmPeriod
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref LowCPUThreshold
+      ComparisonOperator: LessThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref ScaleDownPolicy
+
+  HighCpuUsageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ServiceName}-ecs-service-high-cpu
+      AlarmDescription: !Sub >-
+        High CPU utilization for service ${ServiceName}
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Dimensions:
+        - Name: ServiceName
+          Value: !Sub ${ServiceName}
+        - Name: ClusterName
+          Value: !Ref ClusterName
+      Statistic: Average
+      Period: !Ref AlarmPeriod
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref HighCPUThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref ScaleUpPolicy
+
+# vim: set ft=yaml.cloudformation :

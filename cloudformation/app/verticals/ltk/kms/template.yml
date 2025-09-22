@@ -1,0 +1,87 @@
+Description: Creates the KMS keys for use by LTK.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, staging, prod]
+
+Resources:
+
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: For use by LTK apps to decrypt credentials stored in SSM parameter store.
+      Enabled: true
+      KeyPolicy:
+        Statement:
+          - Sid: Allow IAM user permissions.
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: Allow administration of the key.
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/jason.pearlman
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/nathan.phetteplace
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: Allow use of the key.
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/jason.pearlman
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/nathan.phetteplace
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/adam.bullmer
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/paul.brown
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/trey.chadwell
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/brandon.blair
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/mc
+                - !Sub arn:aws:iam::${AWS::AccountId}:user/will.medlar
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+            Resource: "*"
+
+  Alias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${EnvironmentName}/ltk
+      TargetKeyId: !Ref Key
+
+  # Adding this key's ID to parameter store under the ltk-ops path since
+  # ltk-ops is the only thing that needs to access the ID for the purpose of
+  # encrypting any credentials it generates. All other resources that need
+  # access to this key for decryption are controlled by allowing the
+  # kms:Decrypt action on their policy.
+
+  Parameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/ltk-ops/kms-key-ids/ltk/shared
+      Value: !Ref Key
+
+Outputs:
+
+  KeyArn:
+    Description: The ARN of the KMS key shared by LTK apps.
+    Value: !GetAtt Key.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-ltk-kms-key-arn

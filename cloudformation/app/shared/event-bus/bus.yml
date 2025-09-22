@@ -1,0 +1,422 @@
+Description: Creates an event bus.
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SubEnvironmentName:
+    Type: String
+    Default: ""
+
+  BusName:
+    Type: String
+    AllowedPattern: "^[a-z0-9][-a-z0-9]*$" # note I am specifically not allowing a '.' character because it cannot be used in an export name and I don't want to use a string-replace function which may create odd collisions
+
+  BusEventSourceName:
+    Type: String
+    Default: ""
+
+  StorageBucketName:
+    Description: >
+      The name of an s3 bucket created by the s3-storage.yml template in this same directory.
+    Type: String
+
+  # TODO: enhance or duplicate template to support creating a partner event bus
+
+  FirehoseBufferIntervalSeconds:
+    Description: >
+      Value must be less than DataFreshnessAlarmThreshold parameter when DataFreshnessAlarmThreshold is not 0.
+    Type: Number
+    MinValue: 60
+    MaxValue: 900
+
+  DataFreshnessAlarmThreshold:
+    Description: >
+      Value must greater than FirehoseBufferIntervalSeconds parameter or 0.
+      A value of 0 is discouraged because it will disable the alarm.
+    Type: Number
+    MinValue: 0
+
+  ThrottledRecordsAlarmThreshold:
+    Description: >
+      The threshold at which the throttled record count should raise an alarm.
+      A value of 0 is discouraged because it will disable the alarm.
+    Type: Number
+    MinValue: 0
+    Default: 1
+
+  ThrottledRecordsAlarmPeriod:
+    Description: The number of seconds over which the throttled records count is sampled.
+    Type: Number
+    MinValue: 300
+    Default: 300
+
+  ThrottledRecordsAlarmEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified throttled records count threshold.
+    Type: Number
+    Default: 1
+
+  ThrottledRecordsUrgency:
+    Description: The urgency to use on high throttled records count alarm
+    Type: String
+    AllowedValues: ["critical", "low"]
+    Default: critical
+
+  AlarmTarget:
+    Type: String
+
+  ArchiveRetentionDays:
+    Type: Number
+    Description: >
+      -1 = disable archive
+      0 = retain all events forever
+      otherwise will retain events for at most X days
+    MinValue: -1
+    Default: 30
+
+  S3RetentionDays:
+    Type: Number
+    Description: >
+      0 = keep forever
+      otherwise will retain events in s3 for at most X days
+    MinValue: 0
+    MaxValue: 30
+    Default: 30
+
+  FirehoseBufferSizeMB:
+    Type: Number
+    MinValue: 1
+    MaxValue: 128
+    Default: 128
+
+Mappings:
+  #
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Conditions:
+  #
+  HasArchive: !Not [!Equals [!Ref ArchiveRetentionDays, -1]]
+  EnvIsNotProd: !Not [!Equals [!Ref EnvironmentName, prod]]
+  HasSubEnvironment: !Not [!Equals [!Ref SubEnvironmentName, ""]]
+  HasBusEventSourceName: !Not [!Equals [!Ref BusEventSourceName, ""]]
+
+Resources:
+  #
+  Namespace:
+    Type: Custom::Namespacer
+    Properties:
+      ServiceToken: !Sub >-
+        arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:cfn-namespacer-resource
+      EnvironmentName: !Ref EnvironmentName
+      SubEnvironmentName: !Ref SubEnvironmentName
+
+  Bus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !If
+        - HasBusEventSourceName
+        - !Ref BusEventSourceName
+        - !Sub ${Namespace}-${BusName}
+      EventSourceName: !If
+        - HasBusEventSourceName
+        - !Ref BusEventSourceName
+        - !Ref AWS::NoValue
+
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: 30
+
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+
+  FirehoseToS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: AllowS3EventStorageAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                  - s3:GetBucketLocation
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${StorageBucketName}"
+                  - !Sub "arn:aws:s3:::${StorageBucketName}/*"
+        - PolicyName: AllowLogsAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                Resource:
+                  # arn format threw me for a little loop to start
+                  # docref: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/iam-access-control-overview-cwl.html
+                  - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${FirehoseLogGroup}:log-stream:${FirehoseLogStream}
+
+  FirehoseToS3:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      # DeliveryStreamEncryptionConfigurationInput: # unused
+      DeliveryStreamType: DirectPut
+      # KinesisStreamSourceConfiguration: # unused
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !Sub arn:aws:s3:::${StorageBucketName}
+        BufferingHints:
+          IntervalInSeconds: !Ref FirehoseBufferIntervalSeconds
+          SizeInMBs: !Ref FirehoseBufferSizeMB
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+        CompressionFormat: Snappy
+        # DataFormatConversionConfiguration: # unused # may be able to convert to parquet before saving to s3, but meh, just need to get the data to rest and can let another processor do what it likes
+        # EncryptionConfiguration: # unused
+        Prefix: !Sub events/expiredays=${S3RetentionDays}/region=${AWS::Region}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/
+        ErrorOutputPrefix: !Sub errorevents/expiredays=${S3RetentionDays}/region=${AWS::Region}/year=!{timestamp:yyyy}/month=!{timestamp:MM}/day=!{timestamp:dd}/hour=!{timestamp:HH}/error=!{firehose:error-output-type}/
+        # ProcessingConfiguration: # unused
+        RoleARN: !GetAtt FirehoseToS3Role.Arn
+        # S3BackupConfiguration: # unused
+        # S3BackupMode: # unused
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${BusName}
+
+  BusToFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: AllowPutToFirehoseToS3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource:
+                  - !GetAtt FirehoseToS3.Arn
+
+  DeadLetterQueue:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/sqs/dead-letter.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SubEnvironmentName: !Ref SubEnvironmentName
+        QueueName: !Ref BusName
+        AlarmTarget: !Ref AlarmTarget
+
+  SaveToS3StorageRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Pipe all events to a Firehose going to s3
+      EventBusName: !Ref Bus
+      # Name: 1-64 characters, Pattern: [\.\-_A-Za-z0-9]+
+      Name: SaveToS3Storage
+      # note that even though a pattern can support matching the value null, aws cloudformation refuses to support null in a template
+      # Even the pseudo parameter !Ref AWS::NoValue does not map to null when processed by cloudformation
+      EventPattern:
+        # a rule that forwards all events
+        # there will never be an event without a timestamp
+        time: [{ "prefix": "" }]
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt FirehoseToS3.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt DeadLetterQueue.Outputs.Arn
+          # Id is required:
+          # The Id can include alphanumeric characters, periods (.), hyphens (-), and underscores (_).
+          # Maximum: 64 characters
+          Id: !Sub ${Namespace}-${BusName}-SaveToS3Storage
+          InputTransformer:
+            # https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_InputTransformer.html#API_InputTransformer_Contents
+            InputPathsMap:
+              version: "$.version"
+              id: "$.id"
+              detail_type: "$.detail-type"
+              source: "$.source"
+              account: "$.account"
+              time: "$.time"
+              region: "$.region"
+              resources: "$.resources"
+              detail: "$.detail"
+            InputTemplate: "{\"version\":<version>,\"id\":<id>,\"detail-type\":<detail_type>,\"source\":<source>,\"account\":<account>,\"time\":<time>,\"region\":<region>,\"resources\":<resources>,\"detail\":<detail>}\n" # newline is really important here!
+          RetryPolicy:
+            # refs: https://docs.aws.amazon.com/eventbridge/latest/APIReference/API_RetryPolicy.html
+            #
+            # MaximumEventAgeInSeconds: has minimum value of 60. Maximum value of 86400
+            MaximumEventAgeInSeconds: 86400
+            # MaximumRetryAttempts: has minimum value of 0. Maximum value of 185.
+            MaximumRetryAttempts: 185
+          RoleArn: !GetAtt BusToFirehoseRole.Arn
+
+  DeadLetterQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: allow-bus-send-to-sqs
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - sqs:SendMessage
+            Resource: !GetAtt DeadLetterQueue.Outputs.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt SaveToS3StorageRule.Arn
+      Queues:
+        - !GetAtt DeadLetterQueue.Outputs.Url
+
+  Archive:
+    Type: AWS::Events::Archive
+    Condition: HasArchive
+    Properties:
+      ArchiveName: !Sub ${Namespace}-${BusName}
+      RetentionDays: !Ref ArchiveRetentionDays
+      SourceArn: !GetAtt Bus.Arn
+
+  SchemaDiscoverer:
+    Type: AWS::EventSchemas::Discoverer
+    Condition: EnvIsNotProd
+    Properties:
+      SourceArn: !GetAtt Bus.Arn
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${BusName}
+
+  #
+  # alarms
+  #
+
+  SaveToS3StorageRuleAlarms:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/event-bus/alarms/rule.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        AlarmTarget: !Ref AlarmTarget
+        EventBusName: !Ref Bus
+        RuleName: SaveToS3Storage # note that "!Ref SaveToS3StorageRule" does NOT give you the rule name, it gives the rule id which as of 2021-07-27 is formatted "<event-bus-name>|<event-rule-name>"
+        ThrottledRulesThreshold: 1
+        ThrottledRulesPeriod: 300
+        ThrottledRulesEvaluationPeriods: 1
+        ThrottledRulesSeverity: critical
+        FailedInvocationsMetric: InvocationsFailedToBeSentToDlq
+        FailedInvocationsThreshold: 1
+        FailedInvocationsPeriod: 300
+        FailedInvocationsEvaluationPeriods: 1
+        FailedInvocationsSeverity: critical
+
+  KinesisFirehoseAlarms:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/kinesis/alarms/delivery-stream.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        AlarmTarget: !Ref AlarmTarget
+        DeliveryStream: !Ref FirehoseToS3
+        PercentPutRequestsThreshold: 66
+        PercentPutRequestsEvaluationPeriods: 1
+        PercentPutRequestsSeverity: low
+        PercentPutRecordsThreshold: 66
+        PercentPutRecordsEvaluationPeriods: 1
+        PercentPutRecordsSeverity: low
+        PercentIncomingBytesThreshold: 66
+        PercentIncomingBytesEvaluationPeriods: 1
+        PercentIncomingBytesSeverity: low
+        ThrottledRecordsThreshold: !Ref ThrottledRecordsAlarmThreshold
+        ThrottledRecordsEvaluationPeriods: !Ref ThrottledRecordsAlarmEvaluationPeriods
+        ThrottledRecordsPeriod: !Ref ThrottledRecordsAlarmPeriod
+        ThrottledRecordsSeverity: !Ref ThrottledRecordsUrgency
+        DataFreshnessThreshold: !Ref DataFreshnessAlarmThreshold
+        DataFreshnessPeriod: 300
+        DataFreshnessEvaluationPeriods: 1
+        DataFreshnessSeverity: critical
+
+  #
+  # SSM Outputs
+  #
+
+  OutputParameterBusArn:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/event-bus/${BusName}/arn
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Bus.Arn
+
+  OutputParameterArchiveArn:
+    Condition: HasArchive
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/event-bus/${BusName}/archive/arn
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt Archive.Arn
+
+  OutputParameterPartnerEventSourceArn:
+    Condition: HasBusEventSourceName
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${Namespace}/event-bus/${BusName}/partner-event-source/arn
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Sub arn:aws:events:${AWS::Region}::event-source/${BusEventSourceName}
+
+Outputs:
+  #
+  BusArnExport:
+    Value: !GetAtt Bus.Arn
+    Export:
+      Name: !Join
+        - ""
+        - - !Sub "${EnvironmentName}"
+          - !If [HasSubEnvironment, !Sub "-${SubEnvironmentName}", ""]
+          - !Sub ":event-bus:${BusName}:arn"
+
+  ArchiveArnExport:
+    Condition: HasArchive
+    Value: !GetAtt Archive.Arn
+    Export:
+      Name: !Join
+        - ""
+        - - !Sub "${EnvironmentName}"
+          - !If [HasSubEnvironment, !Sub "-${SubEnvironmentName}", ""]
+          - !Sub ":event-bus:${BusName}:archive:arn"

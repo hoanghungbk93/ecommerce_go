@@ -1,0 +1,196 @@
+---
+Description: Application Load Balancer with target groups
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  LoadBalancerName:
+    Description: The name of the load balancer
+    Type: String
+
+  Scheme:
+    Description: The load balancer scheme
+    Type: String
+    Default: internet-facing
+    AllowedValues:
+      - internet-facing
+      - internal
+
+  DomainName:
+    Description: Domain name for SSL certificate (optional)
+    Type: String
+    Default: ""
+
+  LatencyAlarmThreshold:
+    Description: Latency alarm threshold in seconds
+    Type: Number
+    Default: 0
+
+  TypicalFailureRateThreshold:
+    Description: Typical failure rate threshold percentage
+    Type: Number
+    Default: 0
+
+Conditions:
+  HasDomainName: !Not [!Equals [!Ref DomainName, ""]]
+  HasLatencyAlarm: !Not [!Equals [!Ref LatencyAlarmThreshold, 0]]
+  HasFailureRateAlarm: !Not [!Equals [!Ref TypicalFailureRateThreshold, 0]]
+
+Resources:
+  # Security Group for ALB
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the load balancer
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${LoadBalancerName}-alb-sg
+
+  # Application Load Balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${EnvironmentName}-${LoadBalancerName}
+      Scheme: !Ref Scheme
+      Type: application
+      Subnets:
+        - subnet-095a264d86c3670bb  # Update with your subnet IDs
+        - subnet-0192656fc2b518bf9
+        - subnet-07a3b902dc925f6e4
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${LoadBalancerName}
+
+  # Target Group for Backend
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-${LoadBalancerName}-backend-tg
+      Port: 8080
+      Protocol: HTTP
+      VpcId: vpc-0669e01e74e0eada3  # Update with your VPC ID
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '60'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${LoadBalancerName}-backend-tg
+
+  # Target Group for Frontend
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${EnvironmentName}-${LoadBalancerName}-frontend-tg
+      Port: 80
+      Protocol: HTTP
+      VpcId: vpc-0669e01e74e0eada3  # Update with your VPC ID
+      TargetType: instance
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '60'
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${LoadBalancerName}-frontend-tg
+
+  # HTTP Listener for Backend
+  BackendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 8080
+      Protocol: HTTP
+
+  # HTTP Listener for Frontend
+  FrontendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  # CloudWatch Alarms
+  LatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasLatencyAlarm
+    Properties:
+      AlarmDescription: High latency alarm
+      MetricName: TargetResponseTime
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Ref LatencyAlarmThreshold
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+  FailureRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: HasFailureRateAlarm
+    Properties:
+      AlarmDescription: High 5XX error rate alarm
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Ref TypicalFailureRateThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+Outputs:
+  LoadBalancer:
+    Description: A reference to the Application Load Balancer
+    Value: !Ref LoadBalancer
+
+  LoadBalancerUrl:
+    Description: The URL of the ALB
+    Value: !GetAtt LoadBalancer.DNSName
+
+  BackendTargetGroup:
+    Description: A reference to the backend target group
+    Value: !Ref BackendTargetGroup
+
+  FrontendTargetGroup:
+    Description: A reference to the frontend target group
+    Value: !Ref FrontendTargetGroup
+
+  LoadBalancerSecurityGroup:
+    Description: Security group for the load balancer
+    Value: !Ref LoadBalancerSecurityGroup

@@ -1,0 +1,301 @@
+Description: Fires an alarm when a kinesis delivery stream's usage approaches a percentage of limits
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    AllowedPattern: "[-a-z0-9]+"
+
+  DeliveryStream:
+    Description: >
+      Name of the kinesis delivery stream
+    Type: String
+
+  # PercentPutRequests
+
+  PercentPutRequestsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+
+  PercentPutRequestsEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+
+  PercentPutRequestsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+  # PercentPutRecords
+
+  PercentPutRecordsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+
+  PercentPutRecordsEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+
+  PercentPutRecordsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+  # PercentIncomingBytes
+
+  PercentIncomingBytesThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+    MaxValue: 99 # float arithmetic means 100% is unlikely to to be reached
+
+  PercentIncomingBytesEvaluationPeriods:
+    Description: >
+      The number of 300s long periods that have to be exceeding the threshold for the alarm to fire.
+    Type: Number
+
+  PercentIncomingBytesSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+  # ThrottledRecords
+
+  ThrottledRecordsThreshold:
+    Type: Number
+    MinValue: 0 # 0 means disabled
+
+  ThrottledRecordsPeriod:
+    Type: Number
+    MinValue: 300
+    Default: 300
+
+  ThrottledRecordsEvaluationPeriods:
+    Type: Number
+
+  ThrottledRecordsSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+  # DataFreshness
+
+  DataFreshnessThreshold:
+    Description: >
+      Value is in seconds.
+    Type: Number
+    MinValue: 0 # 0 means disabled
+
+  DataFreshnessPeriod:
+    Type: Number
+    MinValue: 300
+    Default: 300
+
+  DataFreshnessEvaluationPeriods:
+    Type: Number
+
+  DataFreshnessSeverity:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+Conditions:
+  HasPercentPutRequestsTooHighAlarm:
+    !Not [!Equals [!Ref PercentPutRequestsThreshold, 0]]
+  HasPercentPutRecordsTooHighAlarm:
+    !Not [!Equals [!Ref PercentPutRecordsThreshold, 0]]
+  HasPercentIncomingBytesTooHighAlarm:
+    !Not [!Equals [!Ref PercentIncomingBytesThreshold, 0]]
+  HasThrottledRecordsTooHighAlarm:
+    !Not [!Equals [!Ref ThrottledRecordsThreshold, 0]]
+  HasDataFreshnessTooOldAlarm: !Not [!Equals [!Ref DataFreshnessThreshold, 0]]
+
+Resources:
+  #
+  PercentPutRequestsTooHighAlarm:
+    Condition: HasPercentPutRequestsTooHighAlarm
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${DeliveryStream}-kinesisDS-PutReqTooHigh
+      AlarmDescription: !Sub "${PercentPutRequestsSeverity}: kinesis-ds: ${DeliveryStream} put request usage above ${PercentPutRequestsThreshold} percent"
+      Metrics:
+        - Id: e1
+          Label: percentPutRequestsUsed
+          Expression: "m1/m2/3" # a simplified form of (100*m1)/(m2*300)
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: PutRecord.Requests
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: m2
+          MetricStat:
+            Metric:
+              MetricName: PutRequestsPerSecondLimit
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref PercentPutRequestsThreshold
+      EvaluationPeriods: !Ref PercentPutRequestsEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  PercentPutRecordsTooHighAlarm:
+    Condition: HasPercentPutRecordsTooHighAlarm
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${DeliveryStream}-kinesisDS-PutRecTooHigh
+      AlarmDescription: !Sub "${PercentPutRecordsSeverity}: kinesis-ds: ${DeliveryStream} put record usage above ${PercentPutRecordsThreshold} percent"
+      Metrics:
+        - Id: e1
+          Label: percentPutRecordsUsed
+          Expression: "m1/m2/3" # a simplified form of (100*m1)/(m2*300)
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: IncomingRecords
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: m2
+          MetricStat:
+            Metric:
+              MetricName: RecordsPerSecondLimit
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref PercentPutRecordsThreshold
+      EvaluationPeriods: !Ref PercentPutRecordsEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  PercentIncomingBytesTooHighAlarm:
+    Condition: HasPercentIncomingBytesTooHighAlarm
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${DeliveryStream}-kinesisDS-IncomingBytesTooHigh
+      AlarmDescription: !Sub "${PercentIncomingBytesSeverity}: kinesis-ds: ${DeliveryStream} incoming bytes usage above ${PercentIncomingBytesThreshold} percent"
+      Metrics:
+        - Id: e1
+          Label: percentIncomingBytesUsed
+          Expression: "m1/m2/3" # a simplified form of (100*m1)/(m2*300)
+          ReturnData: true
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: IncomingBytes
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+        - Id: m2
+          MetricStat:
+            Metric:
+              MetricName: BytesPerSecondLimit
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: 300
+            Stat: Sum
+          ReturnData: false
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref PercentIncomingBytesThreshold
+      EvaluationPeriods: !Ref PercentIncomingBytesEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  ThrottledRecordsTooHighAlarm:
+    Condition: HasThrottledRecordsTooHighAlarm
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${DeliveryStream}-kinesisDS-ThrottledRecordsTooHigh
+      AlarmDescription: !Sub "${ThrottledRecordsSeverity}: kinesis-ds: ${DeliveryStream} throttled records greater than ${ThrottledRecordsThreshold}"
+      Metrics:
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: ThrottledRecords
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: !Ref ThrottledRecordsPeriod
+            Stat: Sum
+          ReturnData: true
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ThrottledRecordsThreshold
+      EvaluationPeriods: !Ref ThrottledRecordsEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  DataFreshnessTooOldAlarm:
+    Condition: HasDataFreshnessTooOldAlarm
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${DeliveryStream}-kinesisDS-DataFreshnessTooOld
+      AlarmDescription: !Sub "${DataFreshnessSeverity}: kinesis-ds: ${DeliveryStream} data to flush is greater than ${DataFreshnessThreshold} seconds old"
+      Metrics:
+        - Id: m1
+          MetricStat:
+            Metric:
+              MetricName: DeliveryToS3.DataFreshness
+              Namespace: AWS/Firehose
+              Dimensions:
+                - Name: DeliveryStreamName
+                  Value: !Ref DeliveryStream
+            Period: !Ref DataFreshnessPeriod
+            Stat: Maximum
+          ReturnData: true
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref DataFreshnessThreshold
+      EvaluationPeriods: !Ref DataFreshnessEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn

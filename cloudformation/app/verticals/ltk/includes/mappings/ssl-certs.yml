@@ -1,0 +1,17 @@
+---
+ap-southeast-1:
+  dev: arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+us-east-2:
+  dev: arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+us-west-1:
+  dev: arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+us-west-2:
+  dev: arn:aws:acm:ap-southeast-1:282492028148:certificate/31c126fe-b0d8-4750-8179-949634407986
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/0f820978-b83a-4cf9-9293-b6a540cbcd5a

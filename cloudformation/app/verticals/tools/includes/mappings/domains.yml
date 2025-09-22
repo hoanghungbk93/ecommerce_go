@@ -1,0 +1,10 @@
+---
+Public:
+  dev: rs-publishing-dev.com
+  qa: rewardstyle.com
+  prod: rewardstyle.com
+
+Private:
+  dev: rs-publishing-dev.local
+  qa: rslocal
+  prod: rslocal

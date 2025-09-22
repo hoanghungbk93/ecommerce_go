@@ -1,0 +1,64 @@
+Description: Creates SNS topics for LTK usage.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+
+  # Note that dev and qa critical urgency alerts are sent to the low urgency
+  # pagerduty endpoint. We don't want dev and qa waking people up at night.
+
+  PagerDutyEndpoints:
+    dev:
+      LowUrgency: https://events.pagerduty.com/integration/f01036aaba45430ab47e3c6613ece0a0/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/f01036aaba45430ab47e3c6613ece0a0/enqueue
+    qa:
+      LowUrgency: https://events.pagerduty.com/integration/47321ca51dda41f2b78446ce64de0a82/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/47321ca51dda41f2b78446ce64de0a82/enqueue
+    prod:
+      LowUrgency: https://events.pagerduty.com/integration/1a7349706ce142a59bcaf150aac190d1/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/4cb04b6605d8455bb25a01df5ff2ebb2/enqueue
+
+Resources:
+
+  LowUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-ltk-low-urgency-alerts
+
+  LowUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LowUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, LowUrgency]
+      Protocol: https
+
+  CriticalUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-ltk-critical-urgency-alerts
+
+  CriticalUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, CriticalUrgency]
+      Protocol: https
+
+Outputs:
+
+  LowUrgencyAlertsTopicArn:
+    Description: The ARN of the low urgency alerts SNS topic.
+    Value: !Ref LowUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-ltk-low-urgency-alerts-topic-arn
+
+  CriticalUrgencyAlertsTopicArn:
+    Description: The ARN of the critical urgency alerts SNS topic.
+    Value: !Ref CriticalUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-ltk-critical-urgency-alerts-topic-arn

@@ -1,0 +1,108 @@
+---
+Description: >
+    Creates the resources for the back end system providing data on org level metrics;
+    This is intended for the kind of internal reports which dump small outputs
+    as raw JSON in S3.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, staging, prod]
+
+  BucketName:
+    Description: The fully constructed name of the S3 Bucket containing the source data
+    Type: String
+
+  ReportName:
+    Description: The short name identifying the kind of report.
+    Type: String
+    Default: default
+
+  CronSchedule:
+    Description: >
+        cron function-formatted string describing the schedule against which the
+        Glue Crawler will execute a run, taking data from the target,
+        processing the data, and delivering it to a Table within a Glue Database.
+        Defaults to run every weekday at 7am UTC / 2am CDT.
+        https://docs.aws.amazon.com/lambda/latest/dg/tutorial-scheduled-events-schedule-expressions.html
+    Type: String
+    Default: "cron(0 7 ? * MON-FRI *)"
+
+
+Resources:
+
+  GlueServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "glue.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        -
+          PolicyName: !Sub "${EnvironmentName}-${ReportName}-GlueCrawlerRolePolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource: !Sub arn:aws:s3:::${BucketName}/${ReportName}/*
+
+  Database:
+    Type: AWS::Glue::Database
+    DeletionPolicy: Retain
+    Properties:
+      DatabaseInput:
+        Name: !Sub "${EnvironmentName}-${ReportName}"
+      CatalogId: !Ref AWS::AccountId
+
+  Crawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Role: !GetAtt GlueServiceRole.Arn
+      Configuration: >
+        {
+          "Version": 1.0,
+          "Grouping": {
+            "TableGroupingPolicy": "CombineCompatibleSchemas"
+          }
+        }
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "DEPRECATE_IN_DATABASE"
+      Schedule:
+        ScheduleExpression: !Ref CronSchedule
+      DatabaseName: !Ref Database
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${BucketName}/${ReportName}/"
+      Name: !Sub "${EnvironmentName}-${ReportName}"
+
+  ## Query resources should be defined in the parent stacks like so:
+  # Query:
+  #   Type: AWS::Athena::NamedQuery
+  #   Properties:
+  #     QueryString: !Ref QueryString
+  #     Database: !Ref Database
+  #     Name: !Ref QueryName
+
+
+Outputs:
+  Database:
+    Description: The Glue Schema Database name instantiated from raw JSON data in the source S3 bucket.
+    Value: !Ref Database
+

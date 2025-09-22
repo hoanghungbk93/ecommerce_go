@@ -1,0 +1,44 @@
+---
+Parameters:
+
+  Name:
+    Description: >-
+      The name of the DNS record that will be prepended to HostedZoneDomainName.
+    Type: String
+
+  DistributionDomainName:
+    Type: String
+    Description: >-
+      Domain name assigned to cloudfront distributions created.
+
+  HostedZoneName:
+    Type: String
+    Description: >-
+      The name of the domain for the hosted zone where you want to add the
+      record set.
+
+Resources:
+
+  ARecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: !Sub Alias for CloudFront distribution ${DistributionDomainName}
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${Name}.${HostedZoneName}.
+      Type: A
+      AliasTarget:
+        DNSName: !Ref DistributionDomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  AAAARecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: !Sub Alias for CloudFront distribution ${DistributionDomainName}
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${Name}.${HostedZoneName}.
+      Type: AAAA
+      AliasTarget:
+        DNSName: !Ref DistributionDomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+# vim: set ft=yaml.cloudformation :

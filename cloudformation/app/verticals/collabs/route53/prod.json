@@ -1,0 +1,11 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "VerticalName",
+    "ParameterValue": "collabs"
+  }
+]
+

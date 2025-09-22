@@ -1,0 +1,300 @@
+Description: >
+  Creates an alarm that monitors the failure rate of a load balancer.
+
+Parameters:
+  LoadBalancerType:
+    Type: String
+    Default: ALB
+    AllowedValues: [ALB, CLB]
+
+  LoadBalancerFullName:
+    Type: String
+    Description: >
+      The full name of the load balancer.
+    AllowedPattern: '^(app\/)?[a-z0-9-]+(\/[a-f0-9]{16})?$'
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the ELB. This should be lower cased as
+      the vertical name is used in the naming convention of various resources.
+    AllowedPattern: "[a-z0-9-]+"
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  TypicalFailureRateThreshold:
+    Description: >
+      The threshold at which the typical failure rate (5XX only) alarm should
+      be triggered once exceeded.
+    Type: Number
+    Default: 1
+    MinValue: 0.01
+    MaxValue: 100
+
+  StrictFailureRateThreshold:
+    Description: >
+      The threshold at which the strict failure rate (5XX + 4XX) alarm should
+      be triggered once exceeded.
+    Type: Number
+    Default: 3
+    MinValue: 0.01
+    MaxValue: 100
+
+  EvaluationPeriods:
+    Description: >
+      The number of periods over which data is compared to the specified
+      threshold.
+    Type: Number
+    MinValue: 1
+    Default: 1
+
+  DisableStrictFailureRateAlarm:
+    Type: String
+    Description: >
+      Whether strict failure rate monitoring should be disabled.
+    AllowedValues: [!!str true, !!str false]
+    Default: !!str false
+
+Conditions:
+  StrictFailureRateIsEnabled:
+    !Equals [!Ref DisableStrictFailureRateAlarm, !!str false]
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Mappings:
+  Inventory:
+    CustomMetrics:
+      Namespace: CUSTOM/ELB
+    PeriodMap:
+      "1": 60
+      "5": 300
+      "10": 600
+  MetricData:
+    ALB:
+      Namespace: AWS/ApplicationELB
+    CLB:
+      Namespace: AWS/ELB
+
+Resources:
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaFunctionRole
+    Properties:
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Handler: index.handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 300
+      Code:
+        ZipFile: !Sub
+          - |
+            from datetime import datetime, timedelta
+            from dateutil.parser import parse
+            from collections import Counter
+            import re
+            import boto3
+
+            METRIC_NAMESPACE = '${METRIC_NAMESPACE}'
+            ELB_NAME = '${LoadBalancerFullName}'
+            CUSTOM_METRIC_NAMESPACE = '${CUSTOM_METRIC_NAMESPACE}'
+            FREQ = 1
+
+            client = boto3.client("cloudwatch")
+
+
+            METRIC_DIMENSIONS = [
+                {"Name": "LoadBalancer", "Value": ELB_NAME}
+            ]
+
+
+            def generate_custom_metrics(start_time, end_time):
+                metric_names = ["RequestCount", "HTTPCode_Target_2XX_Count",
+                                "HTTPCode_Target_4XX_Count", "HTTPCode_Target_5XX_Count",
+                                "HTTPCode_ELB_4XX_Count", "HTTPCode_ELB_5XX_Count"]
+
+                metrics = [{"Id": name.lower(),
+                            "MetricStat": {"Metric": {"MetricName": name,
+                                                      "Namespace": METRIC_NAMESPACE,
+                                                      "Dimensions": METRIC_DIMENSIONS},
+                                           "Period": 60 * FREQ,
+                                           "Stat": "Sum",
+                                           "Unit": "Count"}} for name in metric_names]
+                res = client.get_metric_data(
+                    StartTime=start_time,
+                    EndTime=end_time,
+                    MetricDataQueries=metrics,
+                )
+                return generate_failure_rate_metrics(res["MetricDataResults"], ts=end_time)
+
+
+            def mk_metric(name, val, ts, resolution=60):
+                return {"MetricName": name,
+                        "Dimensions": METRIC_DIMENSIONS,
+                        "Value": val,
+                        "Timestamp": ts,
+                        "Unit": "None",
+                        "StorageResolution": resolution}
+
+
+            def generate_failure_rate_metrics(metric_data_results, ts=datetime.utcnow()):
+                def get_metric_value(metric_data):
+                    m = re.search(r'(\dxx|requestcount)', metric_data["Id"], re.IGNORECASE)
+                    return {m.group(1).lower(): sum(metric_data["Values"])}
+
+                counter = Counter()
+                for data in metric_data_results:
+                    counter.update(get_metric_value(data))
+
+                print(counter)
+                cTotal = sum([counter[x] for x in counter if x != "requestcount"])
+                print(f'request totals in sync?: {cTotal == counter["requestcount"]}')
+
+                total = counter["requestcount"]
+
+                def percenterize(*x):
+                    if total <= 0:
+                        return 0
+                    return round((sum(x) / total) * 100, 2)
+
+                return [
+                  mk_metric("StrictFailureRate", percenterize(counter["4xx"], counter["5xx"]), ts),
+                  mk_metric("TypicalFailureRate", percenterize(counter["5xx"]), ts),
+                ]
+
+
+            def handler(event, context):
+                t = parse(event["time"])
+                end_time = t - timedelta(seconds=t.second,microseconds=t.microsecond)
+                start_time = end_time - timedelta(minutes=FREQ)
+
+                kwargs = {"Namespace": CUSTOM_METRIC_NAMESPACE,
+                          "MetricData": generate_custom_metrics(start_time, end_time)}
+                print(kwargs)
+                client.put_metric_data(**kwargs)
+          - METRIC_NAMESPACE:
+              !FindInMap [MetricData, !Ref LoadBalancerType, Namespace]
+            CUSTOM_METRIC_NAMESPACE:
+              !FindInMap [Inventory, CustomMetrics, Namespace]
+
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowS3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:GetMetricData
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref LambdaFunction
+      SourceArn: !GetAtt ScheduledEvent.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  ScheduledEvent:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Sub >
+        Scheduled CloudWatch Event rule for the ${LoadBalancerFullName} ELB
+      ScheduleExpression: !Sub "cron(0/1 * * * ? *)"
+      State: ENABLED
+      Targets:
+        - Id: !Sub
+            - ${StackUUID}-FailureRateMonitor
+            - StackUUID: !Select [2, !Split [/, !Ref "AWS::StackId"]]
+          Arn: !GetAtt LambdaFunction.Arn
+
+  TypicalFailureRateTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub >
+        critical: elb: ${LoadBalancerFullName} typical failure rate > ${TypicalFailureRateThreshold}%
+      Namespace: !FindInMap [Inventory, CustomMetrics, Namespace]
+      MetricName: TypicalFailureRate
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref TypicalFailureRateThreshold
+      Period: 300
+      EvaluationPeriods: !Ref EvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+
+  StrictFailureRateTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: StrictFailureRateIsEnabled
+    Properties:
+      AlarmDescription: !Sub >
+        critical: elb: ${LoadBalancerFullName} typical failure rate > ${StrictFailureRateThreshold}%
+      Namespace: !FindInMap [Inventory, CustomMetrics, Namespace]
+      MetricName: StrictFailureRate
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref StrictFailureRateThreshold
+      Period: 300
+      EvaluationPeriods: !Ref EvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName

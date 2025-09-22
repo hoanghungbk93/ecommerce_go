@@ -1,0 +1,64 @@
+Description: Creates SNS topics for Collabs usage.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+
+  # Note that dev and qa critical urgency alerts are sent to the low urgency
+  # pagerduty endpoint. We don't want dev and qa waking people up at night.
+
+  PagerDutyEndpoints:
+    dev:
+      LowUrgency: https://events.pagerduty.com/integration/0cb36c73c4b943fca05b1691bd107c97/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/0cb36c73c4b943fca05b1691bd107c97/enqueue
+    qa:
+      LowUrgency: https://events.pagerduty.com/integration/a7b27c3a1df9413db1f42639c82e1d55/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/a7b27c3a1df9413db1f42639c82e1d55/enqueue 
+    prod:
+      LowUrgency: https://events.pagerduty.com/integration/007f70b363f04f04a74a564d1bd25ef4/enqueue
+      CriticalUrgency: https://events.pagerduty.com/integration/65f74852ef1a4a96b62033694a54bc1a/enqueue
+
+Resources:
+
+  LowUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-collabs-low-urgency-alerts
+
+  LowUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref LowUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, LowUrgency]
+      Protocol: https
+
+  CriticalUrgencyAlerts:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub ${EnvironmentName}-collabs-critical-urgency-alerts
+
+  CriticalUrgencyPagerDutySubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref CriticalUrgencyAlerts
+      Endpoint: !FindInMap [PagerDutyEndpoints, !Ref EnvironmentName, CriticalUrgency]
+      Protocol: https
+
+Outputs:
+
+  LowUrgencyAlertsTopicArn:
+    Description: The ARN of the low urgency alerts SNS topic.
+    Value: !Ref LowUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-collabs-low-urgency-alerts-topic-arn
+
+  CriticalUrgencyAlertsTopicArn:
+    Description: The ARN of the critical urgency alerts SNS topic.
+    Value: !Ref CriticalUrgencyAlerts
+    Export:
+      Name: !Sub ${EnvironmentName}-collabs-critical-urgency-alerts-topic-arn

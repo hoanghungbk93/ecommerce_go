@@ -1,0 +1,70 @@
+---
+- name: Install Python packages for Patroni
+  apt:
+    name:
+      - python3-pip
+      - python3-dev
+      - python3-setuptools
+      - python3-wheel
+      - libpq-dev
+    state: present
+
+- name: Install Patroni and dependencies
+  pip:
+    name:
+      - patroni[etcd3]
+      - psycopg2-binary
+      - etcd3
+    state: present
+
+- name: Create Patroni configuration directory
+  file:
+    path: /etc/patroni
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0755'
+
+- name: Generate Patroni configuration
+  template:
+    src: patroni.yml.j2
+    dest: /etc/patroni/patroni.yml
+    owner: postgres
+    group: postgres
+    mode: '0600'
+  notify: restart patroni
+
+- name: Create Patroni systemd service
+  template:
+    src: patroni.service.j2
+    dest: /etc/systemd/system/patroni.service
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - reload systemd
+    - restart patroni
+
+- name: Create Patroni log directory
+  file:
+    path: /var/log/patroni
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: '0755'
+
+- name: Enable and start Patroni service
+  systemd:
+    name: patroni
+    enabled: yes
+    state: started
+    daemon_reload: yes
+
+- name: Wait for Patroni to be ready
+  uri:
+    url: "http://{{ private_ip }}:8008/health"
+    method: GET
+  register: patroni_health
+  until: patroni_health.status == 200
+  retries: 30
+  delay: 10

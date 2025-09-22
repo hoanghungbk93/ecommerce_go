@@ -1,0 +1,287 @@
+Description: >
+  Creates a lambda that rotates the oldest EC2 instances out of an autoscaling group
+
+Mappings:
+
+  Inventory:
+    AwsEc2RotationLambda:
+      GitSha: 1ef25ea64057c84bf82229db9492b4add2925d2a
+
+Parameters:
+
+  EnvironmentName:
+    Description: >
+      The name of the target environment.
+    Type: String
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the lambda function (should be all lower cased).
+    Type: String
+
+  ProjectName:
+    Description: >
+      Used to name resources in a friendly way.
+    Type: String
+
+  ScheduleExpression:
+    Description: >
+      ScheduleExpression field of AWS::Events::Rule ResourceType.
+      Schedule for how often we try to kill instances.
+    Type: String
+    # Default: "rate(30 minutes)"
+
+  AutoscalingGroup:
+    Description: >
+      Name of the autoscaling group to manage.
+    Type: String
+
+  ErrorAlarmThreshold:
+    Description: The value against which the error metric is compared.
+    Type: Number
+    Default: 1
+
+  ErrorAlarmPeriod:
+    Description: >
+      The time over which the error alarm metric is applied (seconds).
+      Should typically match ScheduleExpression's period in seconds.
+    Type: Number
+
+  ErrorAlarmEvaluationPeriods:
+    Description: The number of periods over which the data is compared to the threshold.
+    Type: Number
+    Default: 1
+
+  TerminationPolicy:
+    Type: String
+    Default: OldestFirst
+    AllowedValues: ['OldestFirst']
+
+  KillCount:
+    Description: >
+      The number of ec2 instances to terminate.
+      Will terminate up to this number of instances so long as the termination would not cause an outage.
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  Cluster:
+    Description: >
+      The name of the ECS Cluster the autoscaling instances are registered to.
+      This input ensures no ec2 instances are killed by the lambda while the instance has running ECS tasks.
+      Leave empty if you do not desire this behavior.
+    Type: String
+    Default: ''
+
+  ParentStackName:
+    Description: >
+      The parent stack of this nested template.
+      This input ensures no ec2 instances are killed by the lambda while the parent stack is changing state.
+      Leave empty if you do not desire this behavior.
+    Type: String
+    Default: ''
+
+Conditions:
+
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasCluster: !Not [!Equals [!Ref Cluster, '']]
+
+Resources:
+
+  SnsTopicV2:
+    Type: AWS::SNS::Topic
+    Condition: HasCluster
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowAutoscalingRead
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:Describe*
+                Resource:
+                  - '*'
+        - PolicyName: AllowAutoscalingPauseResume
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:SuspendProcesses
+                  - autoscaling:ResumeProcesses
+                Resource:
+                  - !Sub arn:aws:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AutoscalingGroup}
+        - PolicyName: AllowCloudFormationRead
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:Get*
+                  - cloudformation:List*
+                  - cloudformation:Describe*
+                Resource:
+                  - '*'
+        - PolicyName: AllowEC2Read
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                Resource:
+                  - '*'
+        - PolicyName: AllowEC2InstanceTermination
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:TerminateInstances
+                Resource:
+                  - '*'
+        - !If
+          - HasCluster
+          - PolicyName: AllowSNSPublish
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - sns:Publish
+                  Resource:
+                    - !Sub
+                      - arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${TopicName}
+                      - TopicName: !GetAtt SnsTopicV2.TopicName
+          - !Ref AWS::NoValue
+        - PolicyName: AllowECSRead
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:List*
+                  - ecs:Describe*
+                Resource:
+                  - '*'
+        - !If
+          - HasCluster
+          - PolicyName: AllowECSUpdate
+            PolicyDocument:
+              Version: 2012-10-17
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - ecs:UpdateContainerInstancesState
+                  Resource:
+                    # New Arn Format comming: https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-resource-ids.html
+                    # This is the main reason why they are introducing the new ARN format
+                    # We cannot declare access controls per cluster's instance members until this happens
+                    # - !Sub arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:container-instance/${Cluster}/*
+                    - '*'
+          - !Ref AWS::NoValue
+
+  FunctionV2:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-${ProjectName}-ec2-rotator-v2
+      Description: !Sub |
+        Will Kill up to ${KillCount} instances in the ${AutoscalingGroup} Autoscaling Group
+        Schedule = ${ScheduleExpression}
+      Role: !GetAtt FunctionRole.Arn
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      ReservedConcurrentExecutions: 1
+      MemorySize: 128
+      Timeout: 300
+      Environment:
+        Variables:
+          TERMINATION_POLICY: !Ref TerminationPolicy
+          ASG_NAME: !Ref AutoscalingGroup
+          STACK_NAME: !Ref ParentStackName
+          KILL_COUNT: !Ref KillCount
+          CLUSTER: !Ref Cluster
+          TOPIC_ARN: !If [HasCluster, !Ref SnsTopicV2, '']
+      Code:
+        S3Bucket: ltk-lambda-artifacts.liketoknow.it
+        S3Key: !Sub
+          - aws-ec2-rotation-lambda/${GitSha}.zip
+          - GitSha: !FindInMap [Inventory, AwsEc2RotationLambda, GitSha]
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-rotator
+
+  SubscriptionV2:
+    Type: AWS::SNS::Subscription
+    Condition: HasCluster
+    Properties:
+      Protocol: lambda
+      Endpoint: !GetAtt FunctionV2.Arn
+      TopicArn: !Ref SnsTopicV2
+
+  InvokePermissionV2:
+    Type: AWS::Lambda::Permission
+    Condition: HasCluster
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      FunctionName: !Ref FunctionV2
+      SourceArn: !Ref SnsTopicV2
+
+  ScheduleRuleV2:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join
+        - " "
+        - - "Schedule for Lambda Function"
+          - !GetAtt FunctionV2.Arn
+      ScheduleExpression: !Ref ScheduleExpression
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt FunctionV2.Arn
+          Id: !Sub ${ProjectName}-InstanceRotationSchedule
+
+  SchedulePermissionV2:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FunctionV2
+      SourceArn: !GetAtt ScheduleRuleV2.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${FunctionV2}-errors
+      AlarmDescription: !Sub Notify on errors from the ${FunctionV2} lambda function.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ErrorAlarmThreshold
+      Period: !Ref ErrorAlarmPeriod
+      EvaluationPeriods: !Ref ErrorAlarmEvaluationPeriods
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FunctionV2
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - Fn::ImportValue: !Sub
+          - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+          - Urgency: !If [EnvIsProd, critical, low]

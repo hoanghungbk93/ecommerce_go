@@ -1,0 +1,50 @@
+Description: Configures the KMS keys for the collaborations vertical
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+Conditions:
+  QAHasKeyAccess: !Or
+    - !Equals [!Ref EnvironmentName, "qa"]
+    - !Equals [!Ref EnvironmentName, "dev"]
+
+Resources:
+  KMS:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/kms/template.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        KeyAdministrators: !Join
+          - ","
+          - - !Sub arn:aws:iam::${AWS::AccountId}:user/victor.unegbu
+        KeyUsers: !Join
+          - ","
+          - - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/developers/ian.chiles
+            - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/developers/jason.yu
+            - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/developers/michael.hoglan
+            - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/developers/patrick.nordahl
+            - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/developers/ryan.koval
+            - !If
+              - QAHasKeyAccess
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/qa/z.sposato
+              - !Ref AWS::NoValue
+            - !If
+              - QAHasKeyAccess
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/collabs/qa/zach.gagnon
+              - !Ref AWS::NoValue
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Vertical
+          Value: !Ref VerticalName

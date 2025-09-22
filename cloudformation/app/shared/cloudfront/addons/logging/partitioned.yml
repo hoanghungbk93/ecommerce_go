@@ -1,0 +1,815 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: "AWS::Serverless-2016-10-31"
+
+Parameters:
+  EnvironmentName:
+    Type: String
+  VerticalName:
+    Type: String
+  Name:
+    Type: String
+
+  AccessLogsFirstTransitionStorageClass:
+    Type: String
+    Default: INTELLIGENT_TIERING
+    AllowedValues: [INTELLIGENT_TIERING, ONEZONE_IA, STANDARD_IA]
+
+  AccessLogsFirstTransitionInDays:
+    Type: Number
+    Default: 30
+    MinValue: 30
+
+  AccessLogsLastTransitionStorageClass:
+    Type: String
+    Default: INTELLIGENT_TIERING
+    AllowedValues: [INTELLIGENT_TIERING, ONEZONE_IA, STANDARD_IA]
+
+  AccessLogsLastTransitionInDays:
+    Type: Number
+    Default: 180
+    MinValue: 60
+
+  AccessLogsExpirationInDays:
+    Type: Number
+    MinValue: 180
+    Default: 365
+
+  FunctionAlarmEvaluationPeriods:
+    Type: Number
+    MinValue: 1
+    Default: 5
+
+  FunctionAlarmPeriod:
+    Type: Number
+    Default: 300
+    MinValue: 60
+
+  FunctionAlarmUrgency:
+    Type: String
+    Default: low
+    AllowedValues: [low, critical]
+
+  FunctionAlarmThresholdPercentage:
+    Type: Number
+    Default: 25
+    MinValue: -1
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - E1029
+
+Conditions:
+  HasFunctionAlarm: !Not [!Equals [!Ref FunctionAlarmThresholdPercentage, -1]]
+  SkipLastTransition: !Equals [!Ref AccessLogsFirstTransitionStorageClass, !Ref AccessLogsLastTransitionStorageClass]
+
+Mappings:
+  Inventory:
+    KeyPrefixes:
+      Gz: partitioned-gz/
+      Parquet: partitioned-parquet/
+      New: new/
+    CodeSnippets:
+      RunQuery: |
+        const aws = require('aws-sdk');
+        const athena = new aws.Athena({
+          apiVersion: '2017-05-18',
+          maxRetries: 10,
+          retryDelayOptions: {base: 100},
+        });
+        const athenaQueryResultsLocation = process.env.ATHENA_QUERY_RESULTS_LOCATION;
+        async function waitForQueryExecution(queryExecutionId) {
+            while (true) {
+                var data = await athena.getQueryExecution({
+                    QueryExecutionId: queryExecutionId
+                }).promise();
+                const state = data.QueryExecution.Status.State;
+                if (state === 'SUCCEEDED') {
+                    return;
+                } else if (state === 'FAILED' || state === 'CANCELLED') {
+                    throw Error(`Query ${queryExecutionId} failed: ${data.QueryExecution.Status.StateChangeReason}`);
+                }
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+        async function runQuery(query) {
+            var params = {
+                QueryString: query,
+                ResultConfiguration: {
+                    OutputLocation: athenaQueryResultsLocation
+                }
+            };
+            return athena.startQueryExecution(params).promise()
+                .then(data => waitForQueryExecution(data.QueryExecutionId));
+        }
+
+Resources:
+
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+      LifecycleConfiguration:
+        Rules:
+          - Status: Enabled
+            ExpirationInDays: !Ref AccessLogsExpirationInDays
+            Transitions:
+            - StorageClass: !Ref AccessLogsFirstTransitionStorageClass
+              TransitionInDays: !Ref AccessLogsFirstTransitionInDays
+            - !If
+              - SkipLastTransition
+              - !Ref AWS::NoValue
+              - StorageClass: !Ref AccessLogsLastTransitionStorageClass
+                TransitionInDays: !Ref AccessLogsLastTransitionInDays
+
+  AccessLogsDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        # change dashes into underscores so athena can play nice...
+        Name: !Join
+          - "_"
+          - - !Ref EnvironmentName
+            - !Join ["_", !Split ["-", !Ref Name]]
+            - access_logs
+
+  PartitionedGzTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AccessLogsDatabase
+      TableInput:
+        Name: partitioned_gz
+        Description: >-
+          Gzip logs delivered by Amazon CloudFront partitioned
+        TableType: EXTERNAL_TABLE
+        Parameters: { "skip.header.line.count": "2" }
+        PartitionKeys:
+        - Name: year
+          Type: string
+        - Name: month
+          Type: string
+        - Name: day
+          Type: string
+        - Name: hour
+          Type: string
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          Columns:
+          - Name: date
+            Type: date
+          - Name: time
+            Type: string
+          - Name: location
+            Type: string
+          - Name: bytes
+            Type: bigint
+          - Name: request_ip
+            Type: string
+          - Name: method
+            Type: string
+          - Name: host
+            Type: string
+          - Name: uri
+            Type: string
+          - Name: status
+            Type: int
+          - Name: referrer
+            Type: string
+          - Name: user_agent
+            Type: string
+          - Name: query_string
+            Type: string
+          - Name: cookie
+            Type: string
+          - Name: result_type
+            Type: string
+          - Name: request_id
+            Type: string
+          - Name: host_header
+            Type: string
+          - Name: request_protocol
+            Type: string
+          - Name: request_bytes
+            Type: bigint
+          - Name: time_taken
+            Type: float
+          - Name: xforwarded_for
+            Type: string
+          - Name: ssl_protocol
+            Type: string
+          - Name: ssl_cipher
+            Type: string
+          - Name: response_result_type
+            Type: string
+          - Name: http_version
+            Type: string
+          - Name: fle_status
+            Type: string
+          - Name: fle_encrypted_fields
+            Type: int
+          - Name: c_port
+            Type: int
+          - Name: time_to_first_byte
+            Type: float
+          - Name: x_edge_detailed_result_type
+            Type: string
+          - Name: sc_content_type
+            Type: string
+          - Name: sc_content_len
+            Type: bigint
+          - Name: sc_range_start
+            Type: bigint
+          - Name: sc_range_end
+            Type: bigint
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          Location: !Sub
+            - "s3://${AccessLogsBucket}/${KeyPrefix}"
+            - KeyPrefix: !FindInMap [Inventory, KeyPrefixes, Gz]
+          SerdeInfo:
+            Parameters:
+              field.delim: "\t"
+              serialization.format: "\t"
+            SerializationLibrary: org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe
+
+  PartitionedParquetTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AccessLogsDatabase
+      TableInput:
+        Name: 'partitioned_parquet'
+        Description: >-
+          Parquet format access logs as transformed from gzip version
+        TableType: EXTERNAL_TABLE
+        Parameters: { 'has_encrypted_data': 'false', 'parquet.compression': 'SNAPPY' }
+        PartitionKeys:
+        - Name: year
+          Type: string
+        - Name: month
+          Type: string
+        - Name: day
+          Type: string
+        - Name: hour
+          Type: string
+        StorageDescriptor:
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          Columns:
+          - Name: date
+            Type: date
+          - Name: time
+            Type: string
+          - Name: location
+            Type: string
+          - Name: bytes
+            Type: bigint
+          - Name: request_ip
+            Type: string
+          - Name: method
+            Type: string
+          - Name: host
+            Type: string
+          - Name: uri
+            Type: string
+          - Name: status
+            Type: int
+          - Name: referrer
+            Type: string
+          - Name: user_agent
+            Type: string
+          - Name: query_string
+            Type: string
+          - Name: cookie
+            Type: string
+          - Name: result_type
+            Type: string
+          - Name: request_id
+            Type: string
+          - Name: host_header
+            Type: string
+          - Name: request_protocol
+            Type: string
+          - Name: request_bytes
+            Type: bigint
+          - Name: time_taken
+            Type: float
+          - Name: xforwarded_for
+            Type: string
+          - Name: ssl_protocol
+            Type: string
+          - Name: ssl_cipher
+            Type: string
+          - Name: response_result_type
+            Type: string
+          - Name: http_version
+            Type: string
+          - Name: fle_status
+            Type: string
+          - Name: fle_encrypted_fields
+            Type: int
+          - Name: c_port
+            Type: int
+          - Name: time_to_first_byte
+            Type: float
+          - Name: x_edge_detailed_result_type
+            Type: string
+          - Name: sc_content_type
+            Type: string
+          - Name: sc_content_len
+            Type: bigint
+          - Name: sc_range_start
+            Type: bigint
+          - Name: sc_range_end
+            Type: bigint
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          Location: !Sub
+            - "s3://${AccessLogsBucket}/${KeyPrefix}"
+            - KeyPrefix: !FindInMap [Inventory, KeyPrefixes, Parquet]
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+
+  CombinedView:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref AccessLogsDatabase
+      TableInput:
+        Name: 'combined'
+        Description: >-
+          combined view over gzip and parquet tables
+        TableType: VIRTUAL_VIEW
+        Parameters: { 'presto_view': 'true' }
+        PartitionKeys: []
+        StorageDescriptor:
+          Columns:
+          - Name: date
+            Type: date
+          - Name: time
+            Type: string
+          - Name: location
+            Type: string
+          - Name: bytes
+            Type: bigint
+          - Name: request_ip
+            Type: string
+          - Name: method
+            Type: string
+          - Name: host
+            Type: string
+          - Name: uri
+            Type: string
+          - Name: status
+            Type: int
+          - Name: referrer
+            Type: string
+          - Name: user_agent
+            Type: string
+          - Name: query_string
+            Type: string
+          - Name: cookie
+            Type: string
+          - Name: result_type
+            Type: string
+          - Name: request_id
+            Type: string
+          - Name: host_header
+            Type: string
+          - Name: request_protocol
+            Type: string
+          - Name: request_bytes
+            Type: bigint
+          - Name: time_taken
+            Type: float
+          - Name: xforwarded_for
+            Type: string
+          - Name: ssl_protocol
+            Type: string
+          - Name: ssl_cipher
+            Type: string
+          - Name: response_result_type
+            Type: string
+          - Name: http_version
+            Type: string
+          - Name: fle_status
+            Type: string
+          - Name: fle_encrypted_fields
+            Type: int
+          - Name: c_port
+            Type: int
+          - Name: time_to_first_byte
+            Type: float
+          - Name: x_edge_detailed_result_type
+            Type: string
+          - Name: sc_content_type
+            Type: string
+          - Name: sc_content_len
+            Type: bigint
+          - Name: sc_range_start
+            Type: bigint
+          - Name: sc_range_end
+            Type: bigint
+          - Name: year
+            Type: string
+          - Name: month
+            Type: string
+          - Name: day
+            Type: string
+          - Name: hour
+            Type: string
+          - Name: file
+            Type: string
+          SerdeInfo: {}
+        ViewOriginalText:
+          Fn::Join:
+          - ''
+          - - '/* Presto View: '
+            - Fn::Base64:
+                Fn::Sub:
+                - |-
+                  {
+                    "originalSql": "SELECT *, \"$path\" as file FROM ${database}.${partitioned_gz_table} WHERE (concat(year, month, day, hour) >= date_format(date_trunc('hour', ((current_timestamp - INTERVAL  '15' MINUTE) - INTERVAL  '1' HOUR)), '%Y%m%d%H')) UNION ALL SELECT *, \"$path\" as file FROM ${database}.${partitioned_parquet_table} WHERE (concat(year, month, day, hour) < date_format(date_trunc('hour', ((current_timestamp - INTERVAL  '15' MINUTE) - INTERVAL  '1' HOUR)), '%Y%m%d%H'))",
+                    "catalog": "awsdatacatalog",
+                    "schema": "${database}",
+                    "columns": [
+                      {"name": "date", "type": "date"},
+                      {"name": "time", "type": "varchar"},
+                      {"name": "location", "type": "varchar"},
+                      {"name": "bytes", "type": "bigint"},
+                      {"name": "request_ip", "type": "varchar"},
+                      {"name": "method", "type": "varchar"},
+                      {"name": "host", "type": "varchar"},
+                      {"name": "uri", "type": "varchar"},
+                      {"name": "status", "type": "integer"},
+                      {"name": "referrer", "type": "varchar"},
+                      {"name": "user_agent", "type": "varchar"},
+                      {"name": "query_string", "type": "varchar"},
+                      {"name": "cookie", "type": "varchar"},
+                      {"name": "result_type", "type": "varchar"},
+                      {"name": "request_id", "type": "varchar"},
+                      {"name": "host_header", "type": "varchar"},
+                      {"name": "request_protocol", "type": "varchar"},
+                      {"name": "request_bytes", "type": "bigint"},
+                      {"name": "time_taken", "type": "real"},
+                      {"name": "xforwarded_for", "type": "varchar"},
+                      {"name": "ssl_protocol", "type": "varchar"},
+                      {"name": "ssl_cipher", "type": "varchar"},
+                      {"name": "response_result_type", "type": "varchar"},
+                      {"name": "http_version", "type": "varchar"},
+                      {"name": "fle_status", "type": "varchar"},
+                      {"name": "fle_encrypted_fields", "type": "integer"},
+                      {"name": "c_port", "type": "integer"},
+                      {"name": "time_to_first_byte", "type": "real"},
+                      {"name": "x_edge_detailed_result_type", "type": "varchar"},
+                      {"name": "sc_content_type", "type": "varchar"},
+                      {"name": "sc_content_len", "type": "bigint"},
+                      {"name": "sc_range_start", "type": "bigint"},
+                      {"name": "sc_range_end", "type": "bigint"},
+                      {"name": "year", "type": "varchar"},
+                      {"name": "month", "type": "varchar"},
+                      {"name": "day", "type": "varchar"},
+                      {"name": "hour", "type": "varchar"},
+                      {"name": "file", "type": "varchar"}
+                    ]
+                  }
+                - { database: !Ref AccessLogsDatabase,
+                    partitioned_gz_table: !Ref PartitionedGzTable,
+                    partitioned_parquet_table: !Ref PartitionedParquetTable }
+            - ' */'
+
+  CreatePartitionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Timeout: 5
+      InlineCode: !Join
+        - "\n"
+        - - |
+            // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+            // SPDX-License-Identifier: MIT-0
+          - !FindInMap [Inventory, CodeSnippets, RunQuery]
+          - |
+            // AWS Glue Data Catalog database and table
+            const table = process.env.TABLE;
+            const database = process.env.DATABASE;
+
+            // creates partitions for the hour after the current hour
+            exports.handler = async (event, context, callback) => {
+              var nextHour = new Date(Date.now() + 60 * 60 * 1000);
+              var year = nextHour.getUTCFullYear();
+              var month = (nextHour.getUTCMonth() + 1).toString().padStart(2, '0');
+              var day = nextHour.getUTCDate().toString().padStart(2, '0');
+              var hour = nextHour.getUTCHours().toString().padStart(2, '0');
+              console.log('Creating Partition', { year, month, day, hour });
+
+              var createPartitionStatement = `
+                ALTER TABLE ${database}.${table}
+                ADD IF NOT EXISTS
+                PARTITION (
+                    year = '${year}',
+                    month = '${month}',
+                    day = '${day}',
+                    hour = '${hour}' );`;
+
+              await runQuery(createPartitionStatement);
+            };
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:GetQueryExecution
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: !Sub
+            - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}"
+            - AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}/*"
+              - AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+          - Effect: Allow
+            Action:
+              - glue:CreatePartition
+              - glue:GetDatabase
+              - glue:GetTable
+              - glue:BatchCreatePartition
+            Resource: '*'
+      Environment:
+        Variables:
+          TABLE: !Ref PartitionedGzTable
+          DATABASE: !Ref AccessLogsDatabase
+          ATHENA_QUERY_RESULTS_LOCATION: !Sub "s3://${AccessLogsBucket}/athena-query-results" # no trailing slash!
+      Events:
+        HourlyEvt:
+          Type: Schedule
+          Properties:
+            Schedule: cron(55 * * * ? *)
+
+  TransformPartitionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Timeout: 900
+      MemorySize: 512
+      InlineCode: !Join
+        - "\n"
+        - - |
+            // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+            // SPDX-License-Identifier: MIT-0
+          - !FindInMap [Inventory, CodeSnippets, RunQuery]
+          - |
+            // AWS Glue Data Catalog database and tables
+            const sourceTable = process.env.SOURCE_TABLE;
+            const targetTable = process.env.TARGET_TABLE;
+            const database = process.env.DATABASE;
+            const accessLogsBucket = process.env.ACCESS_LOGS_BUCKET;
+
+          - !Sub
+              - |
+                const parquetPrefix = "${ParquetPrefix}";
+              - ParquetPrefix: !FindInMap [Inventory, KeyPrefixes, Parquet]
+          - |
+            // get the partition of 2hours ago
+            exports.handler = async (event, context, callback) => {
+              var partitionHour = new Date(Date.now() - 120 * 60 * 1000);
+              var year = partitionHour.getUTCFullYear();
+              var month = (partitionHour.getUTCMonth() + 1).toString().padStart(2, '0');
+              var day = partitionHour.getUTCDate().toString().padStart(2, '0');
+              var hour = partitionHour.getUTCHours().toString().padStart(2, '0');
+
+              console.log('Transforming Partition', { year, month, day, hour });
+
+              var queries = [
+                `CREATE TABLE ${database}.ctas_${year}_${month}_${day}_${hour}
+                 WITH ( format='PARQUET',
+                     external_location='s3://${accessLogsBucket}/${parquetPrefix.replace(/\/$/, "")}/year=${year}/month=${month}/day=${day}/hour=${hour}',
+                     parquet_compression = 'SNAPPY')
+                 AS SELECT *
+                 FROM ${database}.${sourceTable}
+                 WHERE year = '${year}'
+                     AND month = '${month}'
+                     AND day = '${day}'
+                     AND hour = '${hour}';`,
+                `DROP TABLE ${database}.ctas_${year}_${month}_${day}_${hour};`,
+                `ALTER TABLE ${database}.${targetTable}
+                 ADD IF NOT EXISTS
+                 PARTITION (
+                     year = '${year}',
+                     month = '${month}',
+                     day = '${day}',
+                     hour = '${hour}' );`,
+              ];
+              for (var query of queries) {
+                await runQuery(query);
+              }
+            };
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:GetQueryExecution
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}"
+              - AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}/*"
+              - AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+          - Effect: Allow
+            Action:
+              - glue:CreatePartition
+              - glue:GetDatabase
+              - glue:GetTable
+              - glue:BatchCreatePartition
+              - glue:GetPartition
+              - glue:GetPartitions
+              - glue:CreateTable
+              - glue:DeleteTable
+              - glue:DeletePartition
+            Resource: '*'
+      Environment:
+        Variables:
+          SOURCE_TABLE: !Ref PartitionedGzTable
+          TARGET_TABLE: !Ref PartitionedParquetTable
+          DATABASE: !Ref AccessLogsDatabase
+          ATHENA_QUERY_RESULTS_LOCATION: !Sub "s3://${AccessLogsBucket}/athena-query-results" # no trailing slash!
+          ACCESS_LOGS_BUCKET: !Ref AccessLogsBucket
+      Events:
+        HourlyEvt:
+          Type: Schedule
+          Properties:
+            Schedule: cron(1 * * * ? *)
+
+  MoveNewAccessLogsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Timeout: 30
+      ReservedConcurrentExecutions: 25
+      InlineCode: |
+        // Copyright 2018 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+        // SPDX-License-Identifier: MIT-0
+        const aws = require('aws-sdk');
+        const s3 = new aws.S3({ apiVersion: '2006-03-01' });
+
+        // prefix to copy partitioned data to w/o leading but w/ trailing slash
+        const targetKeyPrefix = process.env.TARGET_KEY_PREFIX;
+
+        // regex for filenames by Amazon CloudFront access logs. Groups:
+        // - 1.	year
+        // - 2.	month
+        // - 3.	day
+        // - 4.	hour
+        const datePattern = '[^\\d](\\d{4})-(\\d{2})-(\\d{2})-(\\d{2})[^\\d]';
+        const filenamePattern = '[^/]+$';
+
+        exports.handler = async (event, context, callback) => {
+          const moves = event.Records.map(record => {
+            const bucket = record.s3.bucket.name;
+            const sourceKey = record.s3.object.key;
+
+            const sourceRegex = new RegExp(datePattern, 'g');
+            const match = sourceRegex.exec(sourceKey);
+            if (match == null) {
+              console.log(`Object key ${sourceKey} does not look like an access log file, so it will not be moved.`);
+            } else {
+              const [, year, month, day, hour] = match;
+
+              const filenameRegex = new RegExp(filenamePattern, 'g');
+              const filename = filenameRegex.exec(sourceKey)[0];
+
+              const targetKey = `${targetKeyPrefix}year=${year}/month=${month}/day=${day}/hour=${hour}/${filename}`;
+              console.log(`Copying ${sourceKey} to ${targetKey}.`);
+
+              const copyParams = {
+                CopySource: bucket + '/' + sourceKey,
+                Bucket: bucket,
+                Key: targetKey
+              };
+              const copy = s3.copyObject(copyParams).promise();
+
+              const deleteParams = { Bucket: bucket, Key: sourceKey };
+
+              return copy.then(function () {
+                console.log(`Copied. Now deleting ${sourceKey}.`);
+                const del = s3.deleteObject(deleteParams).promise();
+                console.log(`Deleted ${sourceKey}.`);
+                return del;
+              }, function (reason) {
+                var error = new Error(`Error while copying ${sourceKey}: ${reason}`);
+                callback(error);
+              });
+
+            }
+          });
+          await Promise.all(moves);
+        };
+      Policies:
+      - Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:DeleteObject
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}/${KeyPrefix}*"
+              - KeyPrefix: !FindInMap [Inventory, KeyPrefixes, New]
+                AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+            Resource: !Sub
+              - "arn:${AWS::Partition}:s3:::${AccessLogsBucketName}/${KeyPrefix}*"
+              - KeyPrefix: !FindInMap [Inventory, KeyPrefixes, Gz]
+                AccessLogsBucketName: !Sub ${EnvironmentName}-${Name}-access-logs
+      Environment:
+        Variables:
+          TARGET_KEY_PREFIX: !FindInMap [Inventory, KeyPrefixes, Gz]
+      Events:
+        AccessLogsUploadedEvent:
+          Type: S3
+          Properties:
+            Bucket: !Ref AccessLogsBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                - Name: prefix
+                  Value: !FindInMap [Inventory, KeyPrefixes, New]
+
+  CreatePartitionFunctionErrorRateAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasFunctionAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/lambda/addons/alarms/error-rate.yml
+      Parameters:
+        FunctionName: !Ref CreatePartitionFunction
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        Threshold: !Ref FunctionAlarmThresholdPercentage
+        Urgency: !Ref FunctionAlarmUrgency
+        Period: !Ref FunctionAlarmPeriod
+        EvaluationPeriods: !Ref FunctionAlarmEvaluationPeriods
+
+  TransformPartitionFunctionErrorRateAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasFunctionAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/lambda/addons/alarms/error-rate.yml
+      Parameters:
+        FunctionName: !Ref TransformPartitionFunction
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        Threshold: !Ref FunctionAlarmThresholdPercentage
+        Urgency: !Ref FunctionAlarmUrgency
+        Period: !Ref FunctionAlarmPeriod
+        EvaluationPeriods: !Ref FunctionAlarmEvaluationPeriods
+
+  MoveNewAccessLogsFunctionErrorRateAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasFunctionAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/lambda/addons/alarms/error-rate.yml
+      Parameters:
+        FunctionName: !Ref MoveNewAccessLogsFunction
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        Threshold: !Ref FunctionAlarmThresholdPercentage
+        Urgency: !Ref FunctionAlarmUrgency
+        Period: !Ref FunctionAlarmPeriod
+        EvaluationPeriods: !Ref FunctionAlarmEvaluationPeriods
+
+Outputs:
+  AccessLogsBucket:
+    Value: !GetAtt AccessLogsBucket.RegionalDomainName
+
+  DistributionLoggingPrefix:
+    Value: !FindInMap [Inventory, KeyPrefixes, New]
+
+
+# vim: set ft=yaml.cloudformation :

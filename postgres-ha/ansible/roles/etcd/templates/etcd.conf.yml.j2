@@ -1,0 +1,12 @@
+name: '{{ ansible_hostname }}'
+data-dir: /var/lib/etcd
+listen-client-urls: http://{{ private_ip }}:2379,http://127.0.0.1:2379
+advertise-client-urls: http://{{ private_ip }}:2379
+listen-peer-urls: http://{{ private_ip }}:2380
+initial-advertise-peer-urls: http://{{ private_ip }}:2380
+initial-cluster: {{ ansible_hostname }}=http://{{ private_ip }}:2380
+initial-cluster-token: etcd-cluster-odoo-ha
+initial-cluster-state: new
+enable-pprof: true
+logger: zap
+log-outputs: [stderr]

@@ -1,0 +1,35 @@
+# https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_website_region_endpoints
+# Last Updated: 2018-03-21
+---
+ap-southeast-1:
+  s3: Z3AQBSTGFYJSTF
+us-east-2:
+  s3: Z2O1EMRO9K5GLX
+us-west-1:
+  s3: Z2F56UZL2M1ACD
+us-west-2:
+  S3: Z3BJ6K6RIION7M
+ca-central-1:
+  s3: Z1QDHH18159H29
+ap-south-1:
+  s3: Z11RGJOFQNVJUP
+ap-northeast-2:
+  s3: Z3W03O7B5YMIYP
+ap-northeast-3:
+  s3: Z2YQB5RD63NC85
+ap-southeast-1:
+  s3: Z3O0J2DXBE1FTB
+ap-southeast-2:
+  s3: Z1WCIGYICN2BYD
+ap-northeast-1:
+  s3: Z2M4EHUR26P7ZW
+eu-central-1:
+  s3: Z21DNDUVLTQW6Q
+eu-west-1:
+  s3: Z1BKCTXD74EZPE
+eu-west-2:
+  s3: Z3GKZC51ZF0DB4
+eu-west-3:
+  s3: Z3R1K369G5AVDG
+sa-east-1:
+  s3: Z7KQH4QJS55SO

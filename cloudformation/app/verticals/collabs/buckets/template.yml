@@ -1,0 +1,61 @@
+Description: Creates S3 buckets used in each environment.
+
+Parameters:
+
+  VerticalName:
+    Type: String
+
+  EnvironmentName:
+    Description: The name of the environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+  MediaBucketCorsConfiguration:
+    dev:
+      allowedHeaders: 'cache-control,x-requested-with,content-type'
+      allowedOrigins: '*'
+      allowedMethods: 'PUT,GET'
+      exposedHeaders: ''
+    qa:
+      allowedHeaders: 'cache-control,x-requested-with'
+      allowedOrigins: '*'
+      allowedMethods: 'PUT,GET'
+      exposedHeaders: ''
+    prod:
+      allowedHeaders: 'cache-control,x-requested-with'
+      allowedOrigins: '*'
+      allowedMethods: 'PUT,GET'
+      exposedHeaders: ''
+
+Conditions:
+  HasExposedHeaders: !Not [!Equals [!FindInMap [MediaBucketCorsConfiguration, !Ref EnvironmentName, exposedHeaders], ""]]
+
+Resources:
+
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-collabs-media
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: !Split
+              - ","
+              - !FindInMap [MediaBucketCorsConfiguration, !Ref EnvironmentName, allowedHeaders]
+            AllowedMethods: !Split
+              - ","
+              - !FindInMap [MediaBucketCorsConfiguration, !Ref EnvironmentName, allowedMethods]
+            AllowedOrigins: !Split
+              - ","
+              - !FindInMap [MediaBucketCorsConfiguration, !Ref EnvironmentName, allowedOrigins]
+            ExposedHeaders: !If
+              - HasExposedHeaders
+              - !Split
+                - ","
+                - !FindInMap [MediaBucketCorsConfiguration, !Ref EnvironmentName, exposedHeaders]
+              - !Ref AWS::NoValue
+            Id: someRuleName
+            MaxAge: 3600
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName

@@ -1,0 +1,20 @@
+---
+# Currently, each new region we want to support will need to be defined. Even if
+# we want to use existing certs in another region, we must define the references
+# to the existing certs under the key of the new region.
+ap-southeast-1:
+  dev: arn:aws:acm:ap-southeast-1:676403976676:certificate/409d0315-335a-4ec3-9868-f77019ed55f6
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+us-east-2:
+  dev: arn:aws:acm:ap-southeast-1:676403976676:certificate/409d0315-335a-4ec3-9868-f77019ed55f6
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+us-west-1:
+  dev: arn:aws:acm:ap-southeast-1:676403976676:certificate/409d0315-335a-4ec3-9868-f77019ed55f6
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+us-west-2:
+  dev: arn:aws:acm:ap-southeast-1:676403976676:certificate/409d0315-335a-4ec3-9868-f77019ed55f6
+  qa: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248
+  prod: arn:aws:acm:ap-southeast-1:441221892871:certificate/e7706604-b60e-4d5a-bb2b-34324168f248

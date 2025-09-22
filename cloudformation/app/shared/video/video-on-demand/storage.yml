@@ -1,0 +1,407 @@
+Description: "(SO0021) - Video On Demand workflow with AWS Step Functions, MediaConvert, MediaPackage, S3, CloudFront and DynamoDB. Version v5.1.0 - data storage layer"
+
+Parameters:
+  #
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  ProjectName:
+    Description: The name of the target environment.
+    Type: String
+
+  VerticalName:
+    Description: The name of the vertical that owns the lambda function (should be all lower cased).
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix
+    Type: String
+    AllowedPattern: "[-a-z0-9]*"
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+
+Resources:
+  #
+  DynamoDBTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: guid
+          AttributeType: S
+        - AttributeName: srcBucket
+          AttributeType: S
+        - AttributeName: startTime
+          AttributeType: S
+      KeySchema:
+        - AttributeName: guid
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: srcBucket-startTime-index
+          KeySchema:
+            - AttributeName: srcBucket
+              KeyType: HASH
+            - AttributeName: startTime
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TableName: !Sub ${EnvironmentName}-${ProjectName}
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: "Table name is set to the stack name"
+          - id: W74
+            reason: "The DynamoDB table is configured to use the default encryption"
+
+  Logs:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Status: Enabled
+            ExpirationInDays: 365
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: Glacier
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: "Used to store access logs for other buckets"
+          - id: W51
+            reason: "Bucket does not need a bucket policy"
+
+  Source:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs
+        LogFilePrefix: source-s3-access-logs/
+      LifecycleConfiguration:
+        Rules:
+          - Id: !Sub "${EnvironmentName}-${ProjectName}-source-archive"
+            TagFilters:
+              - Key: !Sub ${EnvironmentName}-${ProjectName}
+                Value: GLACIER
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 1
+                StorageClass: GLACIER
+          - Id: !Sub "${EnvironmentName}-${ProjectName}-source-deep-archive"
+            TagFilters:
+              - Key: !Sub ${EnvironmentName}-${ProjectName}
+                Value: DEEP_ARCHIVE
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 1
+                StorageClass: DEEP_ARCHIVE
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      AccelerateConfiguration:
+        AccelerationStatus: Enabled
+      NotificationConfiguration:
+        EventBridgeConfiguration:
+          EventBridgeEnabled: true
+        QueueConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".mpg"
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".mp4"
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".m4v"
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".mov"
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".m2ts"
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: ".retranscode_config_json"
+
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W51
+            reason: "Bucket does not need a bucket policy"
+
+  Destination:
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Type: AWS::S3::Bucket
+    Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs
+        LogFilePrefix: destination-s3-access-logs/
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods: [GET]
+            AllowedOrigins: ["*"]
+            AllowedHeaders: ["*"]
+            MaxAge: 3000
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  DestinationOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "access-identity-${Destination}"
+
+  DestBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Destination
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${Destination}/*"
+            Principal:
+              CanonicalUser: !GetAtt DestinationOriginAccessIdentity.S3CanonicalUserId
+
+  TranscodeAssets:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs
+        LogFilePrefix: transcode-assets-s3-access-logs/
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  CloudFront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !Sub "${Destination}.s3.${AWS::Region}.amazonaws.com"
+            Id: vodS3Origin
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${DestinationOriginAccessIdentity}"
+        Enabled: true
+        Logging:
+          IncludeCookies: false
+          Bucket: !GetAtt Logs.DomainName
+          Prefix: cloudfront-logs/
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          TargetOriginId: vodS3Origin
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+            Headers:
+              - Origin
+              - Access-Control-Request-Method
+              - Access-Control-Request-Headers
+          ViewerProtocolPolicy: allow-all
+        PriceClass: !If
+          - IsEnvProd
+          - PriceClass_All
+          - PriceClass_100
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W70
+            reason: "CloudFront automatically sets the security policy to TLSv1 when the distribution uses the CloudFront domain name (CloudFrontDefaultCertificate=true)"
+
+  DynamoDBHighErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-dynamodb-error
+      AlarmDescription: !Sub "critical: dynamo: ${EnvironmentName}-${ProjectName} high error count."
+      Namespace: AWS/DynamoDB
+      MetricName: SystemErrors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: "TableName"
+          Value: !Sub ${EnvironmentName}-${ProjectName}
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  DynamoDBHighReadThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-dynamodb-read-throttle
+      AlarmDescription: !Sub "critical: dynamo: ${EnvironmentName}-${ProjectName} GSI read requests are throttled."
+      Namespace: AWS/DynamoDB
+      MetricName: ReadThrottleEvents
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: "TableName"
+          Value: !Sub ${EnvironmentName}-${ProjectName}
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  DynamoDBHighWriteThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-dynamodb-write-throttle
+      AlarmDescription: !Sub "critical: dynamo: ${EnvironmentName}-${ProjectName} GSI write requests are throttled."
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: "TableName"
+          Value: !Sub ${EnvironmentName}-${ProjectName}
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  IngressLambdaQueue:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/sqs/standard-queue.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        QueueName: !Sub ${ProjectName}-ingress
+        AlarmTarget: !Ref AlarmTarget
+        OldestMessageAgeTooHighThreshold: 600
+        VisibilityTimeoutSeconds: 120
+
+  IngressLambdaQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !GetAtt IngressLambdaQueue.Outputs.QueueURL
+      PolicyDocument:
+        Statement:
+          - Sid: allow-s3-send-to-sqs
+            Effect: Allow
+            Action:
+              - sqs:SendMessage
+            Principal:
+              Service: s3.amazonaws.com
+            Resource: !GetAtt IngressLambdaQueue.Outputs.QueueARN
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:s3:*:*:${Source}
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+Outputs:
+  #
+  DynamoDBTableName:
+    Description: The name of the created Dynamodb table.
+    Value: !Ref DynamoDBTable
+
+  SourceBucketName:
+    Description: The name of the source bucket to where videos are uploaded.
+    Value: !Ref Source
+
+  DestinationBucketName:
+    Description: The name of the destination bucket to where various video stream formats are published.
+    Value: !Ref Destination
+
+  CloudFrontDistributionId:
+    Description: The distribution id of the CloudFront CDN where published video streams are available for the world to consume.
+    Value: !Ref CloudFront
+
+  CloudFrontDomainName:
+    Description: The domain name of the CloudFront CDN where published video streams are available for the world to consume.
+    Value: !GetAtt CloudFront.DomainName
+
+  TranscodeAssetsBucketName:
+    Description: The name of the transcode asset bucket to where vod image overlays are located.
+    Value: !Ref TranscodeAssets

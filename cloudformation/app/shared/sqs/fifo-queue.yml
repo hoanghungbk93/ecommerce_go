@@ -1,0 +1,267 @@
+Description: Creates an SQS queue with alarms and a Dead Letter Queue with alarms by default.
+
+# as of 2019-08-28 AWSMaximumMessageSizeBytes = 262144
+# as of 2019-08-28 AWSMessageRetentionPeriodSeconds = 1209600
+
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Description: The name of the target environment.
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the queue. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  QueueName:
+    Type: String
+    Description: >-
+      What name to give the sqs queue.
+      ( will be prefixed with `{EnvironmentName}-` )
+      `{EnvironmentName}-{QueueName}` must be less than or equal to 80 characters
+      If also creating a DLQ, the name gets `-dlq` appended and must still remain under the character limit
+
+  DeadLetterArn:
+    Type: String
+    Description: >-
+      If a DeadLetterArn is not specified a DeadLetterQueue will be created by this stack.
+    Default: ''
+
+  ContentBasedDeduplication:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+
+  DelaySeconds:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 900
+
+  MaximumMessageSizeBytes:
+    Type: Number
+    Default: 262144
+    MinValue: 1024
+    MaxValue: 262144
+
+  MessageRetentionPeriodSeconds:
+    Type: Number
+    Default: 345600
+    MinValue: 60
+    MaxValue: 1209600
+
+  ReceiveMessageWaitTimeSeconds:
+    Description: >
+      The maximum number of seconds a poll operation waits by default.
+      When greater than zero, poll operations are long-polls.
+      When zero, poll operations are short-polls.
+      Ref: https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-short-and-long-polling.html
+    Type: Number
+    Default: 20
+    MinValue: 0
+    MaxValue: 20
+
+  VisibilityTimeoutSeconds:
+    Type: Number
+    Default: 30
+    MinValue: 0
+    MaxValue: 43200
+
+  DLQContentBasedDeduplication:
+    Type: String
+    Description: >-
+      If not specified, defaults to non-dlq setting.
+    Default: ''
+    AllowedValues: ['', 'false', 'true']
+
+  RedriveMaxReceiveCount:
+    Type: Number
+    Default: 3
+    MinValue: 1
+
+
+  # alarm parameters:
+
+  OldestMessageAgeTooHighThreshold:
+    Description: >-
+      A value of 0 removes this alarm
+    Type: Number
+    MinValue: 0
+
+  OldestMessageAgeTooHighPeriod:
+    Type: Number
+    Default: 300
+
+  OldestMessageAgeTooHighEvaluationPeriods:
+    Type: Number
+    Default: 1
+
+  OldestMessageAgeTooHighUrgency:
+    Type: String
+    Default: low
+    AllowedValues: ["low", "critical"]
+
+  DLQOldestMessageAgeTooHighThreshold:
+    Description: >-
+      A value of 0 removes this alarm
+    Type: Number
+    Default: 1
+    MinValue: 0
+
+  DLQOldestMessageAgeTooHighPeriod:
+    Type: Number
+    Default: 300
+
+  DLQOldestMessageAgeTooHighEvaluationPeriods:
+    Type: Number
+    Default: 1
+
+  DLQOldestMessageAgeTooHighUrgency:
+    Type: String
+    Default: critical
+    AllowedValues: ["low", "critical"]
+
+
+Conditions:
+
+  HasDLQContentBasedDeduplication: !Not [!Equals [!Ref DLQContentBasedDeduplication, '']]
+
+  CreateDLQ: !Equals [!Ref DeadLetterArn, '']
+  HasDeadLetterOldestMessageAgeTooHighAlarm: !And [Condition: CreateDLQ, !Not [!Equals [!Ref DLQOldestMessageAgeTooHighThreshold, 0]]]
+  HasOldestMessageAgeTooHighAlarm: !Not [!Equals [!Ref OldestMessageAgeTooHighThreshold, 0]]
+
+
+Resources:
+
+  DeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Condition: CreateDLQ
+    Properties:
+      QueueName: !Sub ${EnvironmentName}-${QueueName}-dlq
+      ContentBasedDeduplication: !If
+        - HasDLQContentBasedDeduplication
+        - !Ref DLQContentBasedDeduplication
+        - !Ref ContentBasedDeduplication
+      FifoQueue: true
+      MaximumMessageSize: 262144
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: QueueType
+          Value: dlq
+
+  Queue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${EnvironmentName}-${QueueName}
+      ContentBasedDeduplication: !Ref ContentBasedDeduplication
+      DelaySeconds: !Ref DelaySeconds
+      FifoQueue: true
+      MaximumMessageSize: !Ref MaximumMessageSizeBytes
+      MessageRetentionPeriod: !Ref MessageRetentionPeriodSeconds
+      ReceiveMessageWaitTimeSeconds: !Ref ReceiveMessageWaitTimeSeconds
+      VisibilityTimeout: !Ref VisibilityTimeoutSeconds
+      RedrivePolicy:
+        deadLetterTargetArn: !If
+          - CreateDLQ
+          - !GetAtt DeadLetterQueue.Arn
+          - !Ref DeadLetterArn
+        maxReceiveCount: !Ref RedriveMaxReceiveCount
+      Tags:
+        - Key: QueueType
+          Value: fifo
+
+
+  # alarms:
+
+
+  DeadLetterOldestMessageAgeTooHighAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasDeadLetterOldestMessageAgeTooHighAlarm
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/sqs/alarms/oldest-message-age-too-high.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        QueueName: !Sub ${QueueName}-dlq
+        OldestMessageAgeTooHighThreshold: !Ref DLQOldestMessageAgeTooHighThreshold
+        OldestMessageAgeTooHighPeriod: !Ref DLQOldestMessageAgeTooHighPeriod
+        OldestMessageAgeTooHighEvaluationPeriods: !Ref DLQOldestMessageAgeTooHighEvaluationPeriods
+        OldestMessageAgeTooHighUrgency: !Ref DLQOldestMessageAgeTooHighUrgency
+
+  OldestMessageAgeTooHighAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasOldestMessageAgeTooHighAlarm
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/sqs/alarms/oldest-message-age-too-high.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        QueueName: !Ref QueueName
+        OldestMessageAgeTooHighThreshold: !Ref OldestMessageAgeTooHighThreshold
+        OldestMessageAgeTooHighPeriod: !Ref OldestMessageAgeTooHighPeriod
+        OldestMessageAgeTooHighEvaluationPeriods: !Ref OldestMessageAgeTooHighEvaluationPeriods
+        OldestMessageAgeTooHighUrgency: !Ref OldestMessageAgeTooHighUrgency
+
+
+  # ssm-outputs:
+
+
+  OutputQueueURLParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/sqs/${QueueName}/url
+      Value: !Ref Queue
+      Type: String
+
+  OutputQueueARNParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/sqs/${QueueName}/arn
+      Value: !GetAtt Queue.Arn
+      Type: String
+
+  OutputDeadLetterQueueURLParam:
+    Type: AWS::SSM::Parameter
+    Condition: CreateDLQ
+    Properties:
+      Name: !Sub /${EnvironmentName}/sqs/${QueueName}-dlq/url
+      Value: !Ref DeadLetterQueue
+      Type: String
+
+  OutputDeadLetterQueueARNParam:
+    Type: AWS::SSM::Parameter
+    Condition: CreateDLQ
+    Properties:
+      Name: !Sub /${EnvironmentName}/sqs/${QueueName}-dlq/arn
+      Value: !GetAtt DeadLetterQueue.Arn
+      Type: String
+
+
+Outputs:
+
+  QueueURL:
+    Value: !Ref Queue
+
+  QueueARN:
+    Value: !GetAtt Queue.Arn
+
+  QueueName:
+    Value: !GetAtt Queue.QueueName
+
+  DeadLetterQueueURL:
+    Condition: CreateDLQ
+    Value: !Ref DeadLetterQueue
+
+  DeadLetterQueueARN:
+    Condition: CreateDLQ
+    Value: !GetAtt DeadLetterQueue.Arn
+
+  DeadLetterQueueName:
+    Condition: CreateDLQ
+    Value: !GetAtt DeadLetterQueue.QueueName

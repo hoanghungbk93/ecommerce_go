@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "VerticalName",
+    "ParameterValue": "ecommerce"
+  },
+  {
+    "ParameterKey": "ClusterName",
+    "ParameterValue": "test"
+  },
+  {
+    "ParameterKey": "VPCZoneIdentifier",
+    "ParameterValue": "subnet-095a264d86c3670bb,subnet-0192656fc2b518bf9,subnet-07a3b902dc925f6e4"
+  },
+  {
+    "ParameterKey": "SecurityGroups",
+    "ParameterValue": "sg-01290171b2a903a15"
+  },
+  {
+    "ParameterKey": "AlarmTarget",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "CapacityTooHighThreshold",
+    "ParameterValue": "0"
+  }
+]

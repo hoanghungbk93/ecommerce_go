@@ -1,0 +1,289 @@
+---
+Description: ECS service with auto scaling
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  ServiceName:
+    Description: The name of the ECS service
+    Type: String
+
+  Cluster:
+    Description: The ECS cluster ID
+    Type: String
+
+  MinCapacity:
+    Description: Minimum number of tasks
+    Type: Number
+    Default: 1
+
+  MaxCapacity:
+    Description: Maximum number of tasks
+    Type: Number
+    Default: 2
+
+  DesiredCount:
+    Description: Desired number of tasks
+    Type: Number
+    Default: 1
+
+  CPU:
+    Description: CPU units for the task
+    Type: Number
+    Default: 256
+
+  MemoryReservation:
+    Description: Memory reservation for the task
+    Type: Number
+    Default: 512
+
+  ContainerUrl:
+    Description: The container image URL
+    Type: String
+
+  TargetGroup:
+    Description: The target group ARN
+    Type: String
+
+  TaskRole:
+    Description: The task role ARN
+    Type: String
+
+  ScaleUpThreshold:
+    Description: CPU threshold for scaling up
+    Type: Number
+    Default: 80
+
+  ScaleDownThreshold:
+    Description: CPU threshold for scaling down
+    Type: Number
+    Default: 30
+
+  EnableCloudWatchLogging:
+    Description: Enable CloudWatch logging
+    Type: String
+    Default: true
+    AllowedValues: [true, false]
+
+  ContainerPort:
+    Description: The port the container listens on
+    Type: Number
+    Default: 8080
+
+Conditions:
+  EnableLogging: !Equals [!Ref EnableCloudWatchLogging, true]
+
+Resources:
+  # CloudWatch Log Group
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: EnableLogging
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}-${ServiceName}
+      RetentionInDays: 7
+
+  # Task Execution Role
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SSMParameterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${EnvironmentName}/*
+
+  # Task Definition
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${EnvironmentName}-${ServiceName}
+      Cpu: !Ref CPU
+      Memory: !Ref MemoryReservation
+      NetworkMode: bridge
+      RequiresCompatibilities:
+        - EC2
+      ExecutionRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Sub ${ServiceName}
+          Cpu: !Ref CPU
+          MemoryReservation: !Ref MemoryReservation
+          Essential: true
+          Image: !Ref ContainerUrl
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              HostPort: 0
+              Protocol: tcp
+          LogConfiguration: !If
+            - EnableLogging
+            - LogDriver: awslogs
+              Options:
+                awslogs-group: !Ref LogGroup
+                awslogs-region: !Ref AWS::Region
+                awslogs-stream-prefix: ecs
+            - !Ref AWS::NoValue
+          Environment:
+            - Name: PORT
+              Value: !Ref ContainerPort
+            - Name: ENVIRONMENT
+              Value: !Ref EnvironmentName
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/db/url
+            - Name: JWT_SECRET
+              ValueFrom: !Sub /${EnvironmentName}/ecommerce/jwt/secret
+
+  # ECS Service
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub ${EnvironmentName}-${ServiceName}
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: !Ref DesiredCount
+      LaunchType: EC2
+      LoadBalancers:
+        - ContainerName: !Sub ${ServiceName}
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+      Role: !Ref ServiceRole
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+
+  # Service Role
+  ServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - elasticloadbalancing:DeregisterInstancesFromLoadBalancer
+                  - elasticloadbalancing:DeregisterTargets
+                  - elasticloadbalancing:Describe*
+                  - elasticloadbalancing:RegisterInstancesWithLoadBalancer
+                  - elasticloadbalancing:RegisterTargets
+                  - ec2:Describe*
+                  - ec2:AuthorizeSecurityGroupIngress
+                Resource: '*'
+
+  # Auto Scaling Target
+  ServiceScalableTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: !Ref MinCapacity
+      ResourceId: !Join
+        - /
+        - - service
+          - !Ref Cluster
+          - !GetAtt Service.Name
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  # Auto Scaling Policy - Scale Up
+  ServiceScaleUpPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-${ServiceName}-scale-up
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+
+  # Auto Scaling Policy - Scale Down
+  ServiceScaleDownPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub ${EnvironmentName}-${ServiceName}-scale-down
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ServiceScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+
+  # CloudWatch Alarm - Scale Up
+  CPUAlarmHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale up on high CPU
+      AlarmActions:
+        - !Ref ServiceScaleUpPolicy
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: !Ref ScaleUpThreshold
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt Service.Name
+        - Name: ClusterName
+          Value: !Ref Cluster
+
+  # CloudWatch Alarm - Scale Down
+  CPUAlarmLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale down on low CPU
+      AlarmActions:
+        - !Ref ServiceScaleDownPolicy
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: !Ref ScaleDownThreshold
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt Service.Name
+        - Name: ClusterName
+          Value: !Ref Cluster
+
+Outputs:
+  ServiceName:
+    Description: The name of the ECS service
+    Value: !Ref Service
+
+  TaskDefinition:
+    Description: The task definition ARN
+    Value: !Ref TaskDefinition

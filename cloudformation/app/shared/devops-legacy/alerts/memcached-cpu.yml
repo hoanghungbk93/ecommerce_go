@@ -1,0 +1,52 @@
+Description: Creates an alarm to alert on high CPU rate for existing legacy memcached clusters
+
+Parameters:
+
+  CacheCluster:
+    Description: The name of the memcached cluster.
+    Type: String
+
+  AlertTopicArn:
+    Description: The ARN of the SNS topic to send alerts to.
+    Type: String
+    Default: arn:aws:sns:ap-southeast-1:441221892871:ec2_healthcheck
+
+  CPUHighThreshold:
+    Description: The threshold at which the RDS instance's CPU triggers an alarm (percent).
+    Type: Number
+    Default: 85
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the RDS instance's CPU is sampled.
+    Type: Number
+    Default: 300
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 1
+
+
+Resources:
+
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub legacy-memcached-${CacheCluster}-CpuTooHigh
+      AlarmDescription: !Sub Notify when the legacy ${CacheCluster} memcached cluster CPU is too high.
+      Namespace: AWS/ElastiCache
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref CPUHighThreshold
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AlertTopicArn
+      OKActions:
+        - !Ref AlertTopicArn
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref CacheCluster

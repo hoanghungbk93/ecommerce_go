@@ -1,0 +1,252 @@
+Description: >-
+  Creates a WAF v2 Web ACL resource to protect cloudfront distributions and their origins from spammy requests.
+  Supports outlining a list of regex patterns to identify static assets to help separate initial requests
+  from expected cascading requests when defining a rate limit.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment. This should include the subenv name at this level.
+    Type: String
+
+  ProjectName:
+    Description: >
+      The project name of the source site that will be firewalled. Should be the github repository name.
+    Type: String
+
+  RateLimitSoftThreshold:
+    Description: >-
+      The lower bound rate limit of requests per 5 minutes to begin setting an additional header to potentially
+      spammy requests. Allows reporting or applications the ability to handle these requests themselves.
+    Type: Number
+    Default: -1
+
+  RateLimitHardThreshold:
+    Description: >-
+      The lower bound rate limit of requests per 5 minutes to begin blocking requests from spammy client IPs.
+    Type: Number
+    Default: -1
+
+  RegularExpressionsList:
+    Description: >-
+      A comma separated list of regex patterns to capture static files that should not count towards rate limits.
+      Helpful to not count against known cascading requests from loading a page, and instead focuses rate limits
+      on requests that overload origins.
+    Type: CommaDelimitedList
+    Default: ^\/favicon.*,^\/\.well-known\/.*,^\/apple-app-site-association,^\/static\/.*,^\/robots\.txt,^\/sitemap\.xml,^\/sw.js
+
+  FirewallBadResponseCodesMaxPerMinute:
+    Description: >-
+      The maximum number of bad requests per minute an origin IP can issue before they are considered abusive and blocked.
+    Type: Number
+    Default: 0
+
+Conditions:
+  HasSoftLimit: !Not [!Equals [!Ref RateLimitSoftThreshold, -1]]
+  HasHardLimit: !Not [!Equals [!Ref RateLimitHardThreshold, -1]]
+  HasHttpCodeLimiting:
+    !Not [!Equals [!Ref FirewallBadResponseCodesMaxPerMinute, 0]]
+
+Resources:
+  FirewallRegexSet:
+    Type: AWS::WAFv2::RegexPatternSet
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-static-asset-paths
+      Description: >-
+        List of patterns to be used for matching against static files vs router routes
+      Scope: CLOUDFRONT
+      RegularExpressionList: !Ref RegularExpressionsList
+
+  # These should be used sparingly as the overuse of this could mean a misconfiguration in thresholds instead.
+  # This list will also take precedence over any blocked IPs, both manual and automatic.
+  ManualAllowIPSet:
+    Type: AWS::WAFv2::IPSet
+    DeletionPolicy: Retain
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-manual-allow
+      Description: >-
+        IP Set for manually allowed client IP addresses, such as business critical services that
+        may otherwise get caught in a rate limit ban.
+      IPAddressVersion: IPV4
+      Scope: CLOUDFRONT
+      Addresses: []
+
+  ManualBlockIPSet:
+    Type: AWS::WAFv2::IPSet
+    DeletionPolicy: Retain
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-manual-block
+      Description: >-
+        IP Set for manually blocking client IP addresses, such as bad actors that have circumvented
+        rate limit checks, or known malicious hosts.
+      IPAddressVersion: IPV4
+      Scope: CLOUDFRONT
+      Addresses: []
+
+  # This list should only be removed from in the event that a client IP was accidentally added to the list and is a known good actor.
+  AutoBlockIPSet:
+    Type: AWS::WAFv2::IPSet
+    Condition: HasHttpCodeLimiting
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-auto-block
+      Description: >-
+        IP Set of automatically blocked client IP addresses that is maintained automatically by aws-waf-lambda.
+      IPAddressVersion: IPV4
+      Scope: CLOUDFRONT
+      Addresses: []
+
+  Firewall:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub ${EnvironmentName}-${ProjectName}-rate-limit-firewall
+      DefaultAction:
+        Allow: {}
+      Scope: CLOUDFRONT
+      VisibilityConfig:
+        CloudWatchMetricsEnabled: false
+        SampledRequestsEnabled: true
+        MetricName: !Sub ${EnvironmentName}-${ProjectName}-rate-limit-firewall
+      Rules:
+        # Manual user managed list
+        - Name: manual-allow
+          Priority: 0
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt ManualAllowIPSet.Arn
+          Action:
+            Allow: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub ${EnvironmentName}-${ProjectName}-manual-allow
+        # Manual user managed list
+        - Name: manual-block
+          Priority: 1
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt ManualBlockIPSet.Arn
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: !Sub ${EnvironmentName}-${ProjectName}-manual-block
+        # Managed list by external lambda
+        - !If
+          - HasHttpCodeLimiting
+          - Name: auto-block
+            Priority: 2
+            Statement:
+              IPSetReferenceStatement:
+                Arn: !GetAtt AutoBlockIPSet.Arn
+            Action:
+              Block: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: !Sub ${EnvironmentName}-${ProjectName}-auto-block
+          - !Ref AWS::NoValue
+        # source: aws-account-cloudformation/v2/layers/app/components/usa-embargo/cfn-wafv2/regional/template.yml
+        - Name: CloudFrontUsaEmbargoCountriesAndRegions
+          Priority: 3
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: UsaEmbargoCountryCloudfrontGeoMatchMetric
+          Statement:
+            RuleGroupReferenceStatement:
+              Arn: !ImportValue WafV2CloudfrontRuleGroupUsaEmbargoARN
+        # Soft Limit is intended to warn / alert
+        - !If
+          - HasSoftLimit
+          - Name: tag-potentially-abusive-clients
+            Priority: 4
+            Statement:
+              RateBasedStatement:
+                Limit: !Ref RateLimitSoftThreshold
+                AggregateKeyType: IP
+                ScopeDownStatement:
+                  NotStatement:
+                    Statement:
+                      RegexPatternSetReferenceStatement:
+                        Arn: !GetAtt FirewallRegexSet.Arn
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+            Action:
+              Count:
+                CustomRequestHandling:
+                  InsertHeaders:
+                    - Name: rate-limit # Will appear in the request as x-amzn-waf-rate-limit
+                      Value: !Ref RateLimitSoftThreshold
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: tag-potentially-abusive-clients
+          - !Ref AWS::NoValue
+
+        # Hard limit is intended to block
+        - !If
+          - HasHardLimit
+          - Name: block-abusive-clients
+            Priority: 5
+            Statement:
+              RateBasedStatement:
+                Limit: !Ref RateLimitHardThreshold
+                AggregateKeyType: IP
+                ScopeDownStatement:
+                  NotStatement:
+                    Statement:
+                      RegexPatternSetReferenceStatement:
+                        Arn: !GetAtt FirewallRegexSet.Arn
+                        FieldToMatch:
+                          UriPath: {}
+                        TextTransformations:
+                          - Priority: 0
+                            Type: NONE
+            Action:
+              Block: {}
+            VisibilityConfig:
+              SampledRequestsEnabled: true
+              CloudWatchMetricsEnabled: true
+              MetricName: block-abusive-clients
+          - !Ref AWS::NoValue
+
+Outputs:
+  WebACLArn:
+    Description: >-
+      The ARN of the v2 Web ACL that was created. This value will need to be added to a CloudFront Distribution
+      WebACLId parameter.
+    Value: !GetAtt Firewall.Arn
+
+  ManualAllowIPSet:
+    Description: >-
+      The value of !Ref from the IP Set, including a pipe delimited name, id, and scope.
+      This is provided for conciseness of an export since it is the only way to expose the name.
+    Value: !Ref ManualAllowIPSet
+
+  ManualBlockIPSet:
+    Description: >-
+      The value of !Ref from the IP Set, including a pipe delimited name, id, and scope.
+      This is provided for conciseness of an export since it is the only way to expose the name.
+    Value: !Ref ManualBlockIPSet
+
+  AutoBlockIPSet:
+    Condition: HasHttpCodeLimiting
+    Description: >-
+      The value of !Ref from the IP Set, including a pipe delimited name, id, and scope.
+      This is provided for conciseness of an export since it is the only way to expose the name.
+    Value: !Ref AutoBlockIPSet
+
+  ManualAllowIPSetArn:
+    Value: !GetAtt ManualAllowIPSet.Arn
+
+  ManualBlockIPSetArn:
+    Value: !GetAtt ManualBlockIPSet.Arn
+
+  AutoBlockIPSetArn:
+    Condition: HasHttpCodeLimiting
+    Value: !GetAtt AutoBlockIPSet.Arn

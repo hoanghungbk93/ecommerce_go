@@ -1,0 +1,2529 @@
+Description: "(SO0021) - Video On Demand workflow with AWS Step Functions, MediaConvert, MediaPackage, S3, CloudFront and DynamoDB. Version v5.1.0 - processor layer"
+
+Mappings:
+  #
+  SourceCode:
+    General:
+      S3Bucket: "ltk-lambda-artifacts.liketoknow.it"
+      KeyPrefix: "ltk-media-vod-backplane"
+
+Parameters:
+  #
+  # required
+  #
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  ProjectName:
+    Description: The name of the target environment.
+    Type: String
+
+  VerticalName:
+    Description: The name of the vertical that owns the lambda function (should be all lower cased).
+    Type: String
+
+  DynamoDBTableName:
+    Description: Name of the dynamodb table the processor stores results into.
+    Type: String
+
+  SourceBucket:
+    Description: Name of the Source upload s3 bucket.
+    Type: String
+
+  DestinationBucket:
+    Description: Name of the Destination S3 bucket where published stream files are stored.
+    Type: String
+
+  CloudFrontDistributionId:
+    Description: Distribution id of the CloudFront CDN where stream files are available for the world to consume.
+    Type: String
+
+  CloudFrontDomainName:
+    Description: Domain Name of the CloudFront CDN where stream files are available for the world to consume.
+    Type: String
+
+  TranscodeAssetsBucket:
+    Description: Name of the Transcode Assets s3 bucket.
+    Type: String
+
+  IngressQueueArn:
+    Description: ARN of the ingress SQS queue created in the storage template
+    Type: String
+
+  MediaConvertJobQueueNames:
+    Description: Comma separated list of mediaconvert job queue names
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    AllowedPattern: "[-a-z0-9]*"
+
+  #
+  # optional
+  #
+
+  LambdasVersion:
+    Description: >
+      Gitsha of the ltk-media-vod-backplane project lambdas to use.
+      Original default value: 731f6b8660b0aac9eb6a22f78772af44d6580344
+      Now defaults to the minimally required aws backplane lambdas version.
+    Type: String
+    Default: "a5456744710b83529522a465cbc58132a168448b"
+
+  WorkflowTrigger:
+    Description: How the workflow will be triggered (source video upload to S3 or source metadata file upload)
+    Type: String
+    Default: VideoFile
+    AllowedValues:
+      - VideoFile
+      - MetadataFile
+
+  Glacier:
+    Description: If enabled, source assets will be tagged for archiving to Glacier or Glacier Deep Archive once the workflow is complete
+    Type: String
+    Default: GLACIER
+    AllowedValues:
+      - DISABLED
+      - GLACIER
+      - DEEP_ARCHIVE
+
+  FrameCapture:
+    Description: If enabled, frame capture is added to the job submitted to MediaConvert
+    Type: String
+    Default: Yes
+    AllowedValues:
+      - Yes
+      - No
+
+  EnableMediaPackage:
+    Description: If enabled, MediaPackage VOD will be included in the workflow
+    Type: String
+    Default: No
+    AllowedValues:
+      - Yes
+      - No
+
+  EnableSns:
+    Description: Enable Ingest and Publish email notifications, error messages are not affected by this parameter.
+    Type: String
+    Default: Yes
+    AllowedValues:
+      - Yes
+      - No
+
+  AcceleratedTranscoding:
+    Description: Enable accelerated transcoding in AWS Elemental MediaConvert. PREFERRED will only use acceleration if the input files is supported. ENABLED accleration is applied to all files (this will fail for unsupported file types) see MediaConvert Documentation for more detail https://docs.aws.amazon.com/mediaconvert/latest/ug/accelerated-transcoding.html
+    Type: String
+    Default: PREFERRED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+      - PREFERRED
+
+  IngressLambdaTimeoutSeconds:
+    Description: Timeout of the ingress lambda function, which is also tightly coupled to the SQS Queue visibility timeout.
+    Type: Number
+    Default: 120
+    MinValue: 1
+    MaxValue: 900
+
+  IngressReservedConcurrentExecutions:
+    Description: The maximum number of concurrent executions allowed for the lambda function.
+    Type: Number
+    Default: 1
+    MinValue: 0
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "Workflow"
+        Parameters:
+          - WorkflowTrigger
+          - Glacier
+          - EnableSns
+      - Label:
+          default: "AWS Elemental MediaConvert"
+        Parameters:
+          - FrameCapture
+          - AcceleratedTranscoding
+      - Label:
+          default: "AWS Elemental MediaPackage"
+        Parameters:
+          - EnableMediaPackage
+    ParameterLabels:
+      Glacier:
+        default: Archive source content
+      WorkflowTrigger:
+        default: Workflow trigger
+      FrameCapture:
+        default: Enable Frame Capture
+      EnableMediaPackage:
+        default: Enable MediaPackage
+      AcceleratedTranscoding:
+        default: Accelerated Transcoding
+      EnableSns:
+        default: Enable SNS Notifications
+
+Conditions:
+  IsMediaPackageEnabled: !Equals [!Ref EnableMediaPackage, Yes]
+
+Resources:
+  #
+  CustomResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: "/"
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-custom-resource"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+              - Effect: Allow
+                Action:
+                  - s3:PutBucketNotification
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}"
+              - Effect: Allow
+                Action:
+                  - mediaconvert:CreatePreset
+                  - mediaconvert:CreateJobTemplate
+                  - mediaconvert:DeletePreset
+                  - mediaconvert:DeleteJobTemplate
+                  - mediaconvert:DescribeEndpoints
+                  - mediaconvert:ListJobTemplates
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:mediaconvert:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action:
+                  - mediapackage-vod:DeleteAsset
+                  - mediapackage-vod:DeletePackagingConfiguration
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:assets/*"
+                  - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-configurations/packaging-config-*"
+              - Effect: Allow
+                Action:
+                  - mediapackage-vod:DescribePackagingGroup
+                  - mediapackage-vod:DeletePackagingGroup
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:mediapackage-vod:${AWS::Region}:${AWS::AccountId}:packaging-groups/${EnvironmentName}-${ProjectName}-packaging-group"
+              - Effect: Allow
+                Action:
+                  - mediapackage-vod:CreatePackagingConfiguration
+                  - mediapackage-vod:CreatePackagingGroup
+                  - mediapackage-vod:ListAssets
+                  - mediapackage-vod:ListPackagingConfigurations
+                  - mediapackage-vod:ListPackagingGroups
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - cloudfront:GetDistributionConfig
+                  - cloudfront:UpdateDistribution
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistributionId}"
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !Ref IngressQueueArn
+                Condition:
+                  ArnLike:
+                    aws:SourceArn: !Sub arn:aws:s3:*:*:${SourceBucket}
+                  StringEquals:
+                    aws:SourceAccount: ${AWS::AccountId}
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is required to create CloudWatch logs and interact with MediaConvert / MediaPackage actions that do not support resource level permissions"
+
+  StepFunctionsServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - !Sub "states.${AWS::Region}.amazonaws.com"
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-stepfunctions-service-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:*"
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt FailureRetryLambda.Outputs.DeadLetterQueueArn
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "The * resource is required since the functions need to be created before the state machine"
+
+  MediaConvertRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - mediaconvert.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-mediatranscode-policy"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}/*"
+                  - !Sub "arn:aws:s3:::${DestinationBucket}/*"
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${TranscodeAssetsBucket}"
+                  - !Sub "arn:aws:s3:::${TranscodeAssetsBucket}/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "/* required to get/put objects to S3"
+
+  MediaPackageVodRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - mediapackage.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-mediapackagevod-policy"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetBucketLocation
+                  - s3:GetBucketRequestPayment
+                Resource:
+                  - !Sub "arn:aws:s3:::${DestinationBucket}"
+                  - !Sub "arn:aws:s3:::${DestinationBucket}/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is required to get objects from S3"
+
+  CloudWatchLambdaInvokeErrors:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ErrorHandler.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EncodeErrorRule.Arn
+
+  CloudWatchLambdaInvokeCompletes:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt StepFunctions.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EncodeCompleteRule.Arn
+
+  EncodeCompleteRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${EnvironmentName}-${ProjectName}-EncodeComplete"
+      Description: MediaConvert Completed event rule
+      EventPattern:
+        source:
+          - aws.mediaconvert
+        detail:
+          status:
+            - COMPLETE
+          userMetadata:
+            workflow:
+              - !Sub "${EnvironmentName}-${ProjectName}"
+      Targets:
+        - Arn: !GetAtt StepFunctions.Arn
+          Id: !Sub "${EnvironmentName}-${ProjectName}-StepFunctions"
+
+  EncodeErrorRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${EnvironmentName}-${ProjectName}-EncodeError"
+      Description: MediaConvert Error event rule
+      EventPattern:
+        source:
+          - aws.mediaconvert
+        detail:
+          status:
+            - ERROR
+          userMetadata:
+            workflow:
+              - !Sub "${EnvironmentName}-${ProjectName}"
+      Targets:
+        - Arn: !GetAtt ErrorHandler.Arn
+          Id: !Sub "${EnvironmentName}-${ProjectName}-EncodeError"
+
+  SnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Sub "${EnvironmentName}-${ProjectName}-Notifications"
+      KmsMasterKeyId: alias/aws/sns
+
+  S3ConfigV2:
+    Type: Custom::S3
+    Properties:
+      ServiceToken: !GetAtt CustomResource.Arn
+      Source: !Ref SourceBucket
+      IngestArn: !Ref IngressQueueArn
+      Resource: S3Notification
+      WorkflowTrigger: !Ref WorkflowTrigger
+
+  MediaConvertEndPoint:
+    Type: Custom::LoadLambda
+    Properties:
+      ServiceToken: !GetAtt CustomResource.Arn
+      Resource: EndPoint
+
+  MediaConvertTemplates:
+    Type: Custom::LoadLambda
+    Properties:
+      ServiceToken: !GetAtt CustomResource.Arn
+      Resource: MediaConvertTemplates
+      StackName: !Sub "${EnvironmentName}-${ProjectName}"
+      EndPoint: !GetAtt MediaConvertEndPoint.EndpointUrl
+      EnableMediaPackage: !Ref EnableMediaPackage
+
+  MediaPackageVod:
+    Type: Custom::LoadLambda
+    Properties:
+      ServiceToken: !GetAtt CustomResource.Arn
+      Resource: MediaPackageVod
+      StackName: !Sub "${EnvironmentName}-${ProjectName}"
+      GroupId: !Sub "${EnvironmentName}-${ProjectName}-packaging-group"
+      PackagingConfigurations: "HLS,DASH,MSS,CMAF"
+      DistributionId: !Ref CloudFrontDistributionId
+      EnableMediaPackage: !Ref EnableMediaPackage
+
+  CustomResource:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-custom-resource"
+      Description: Used to deploy resources not supported by CloudFormation
+      Handler: index.handler
+      Role: !GetAtt CustomResourceRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "custom-resource.zip"
+      Runtime: nodejs16.x
+      Timeout: 180
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          LambdasVersion: !Ref LambdasVersion
+
+  CustomResourceErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-custom-resource-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-custom-resource has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-custom-resource"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  CustomResourceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CustomResource}"
+      RetentionInDays: 30
+
+  IngressLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-ingress-lambda-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt StepFunctions.Arn
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:DeleteMessageBatch
+                  - sqs:GetQueueAttributes
+                Resource: !Ref IngressQueueArn
+
+  IngressLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-ingress"
+      Description: Buffered entrypoint for video upload events
+      Handler: index.handler
+      Role: !GetAtt IngressLambdaRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "ingress.zip"
+      Runtime: nodejs16.x
+      Timeout: !Ref IngressLambdaTimeoutSeconds
+      ReservedConcurrentExecutions: !Ref IngressReservedConcurrentExecutions
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          StepFunctionsName: !Ref StepFunctions
+          LambdasVersion: !Ref LambdasVersion
+
+  IngressLambdaQueueTrigger:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/lambda/sqs-trigger.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        SqsQueueArn: !Ref IngressQueueArn
+        LambdaFunctionArn: !GetAtt IngressLambda.Arn
+        BatchSize: 1
+
+  IngressLambdaErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-ingress-lambda-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-input-validate has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-input-validate"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  IngressLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${IngressLambda}"
+      RetentionInDays: 30
+
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-step-functions-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-ingest"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-process"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-publish"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource:
+                  - !GetAtt StepFunctionsDLQ.Arn
+
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  StepFunctions:
+    # if you modify this definition, also modify StepFunctionsWithoutDLQ resource in this template
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-step-functions"
+      Description: Creates a unique identifer (GUID) and executes the Ingest StateMachine
+      Handler: index.handler
+      Role: !GetAtt StepFunctionsRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "step-functions.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      DeadLetterConfig:
+        TargetArn: !GetAtt StepFunctionsDLQ.Arn
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          IngestWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-ingest"
+          ProcessWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-process"
+          PublishWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-publish"
+          LambdasVersion: !Ref LambdasVersion
+
+  StepFunctionsWithoutDLQ:
+    # if you modify this definition, also modify StepFunctions resource in this template
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-step-functions-without-dlq"
+      Description: Used by a parent state machine to execute a subsequent state machine. Parent state machine is expected to catch errors for the purpose of retries.
+      Handler: index.handler
+      Role: !GetAtt StepFunctionsRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "step-functions.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          IngestWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-ingest"
+          ProcessWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-process"
+          PublishWorkflow: !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-publish"
+          LambdasVersion: !Ref LambdasVersion
+
+  StepFunctionsErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-step-functions-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-step-functions has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-step-functions"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  StepFunctionsWithoutDLQErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-step-functions-without-dlq-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-step-functions-without-dlq has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-step-functions-without-dlq"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  StepFunctionsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepFunctions}"
+      RetentionInDays: 30
+
+  StepFunctionsWithoutDLQLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StepFunctionsWithoutDLQ}"
+      RetentionInDays: 30
+
+  StepFunctionsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "${EnvironmentName}-${ProjectName}-step-functions-dlq"
+      MessageRetentionPeriod: 1209600
+      Tags:
+        - Key: QueueType
+          Value: dlq
+
+  StepFunctionsDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-step-functions-dlq
+      AlarmDescription: !Sub "critical: sqs: ${EnvironmentName}-${ProjectName}-step-functions dlq has messages."
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub ${EnvironmentName}-${ProjectName}-step-functions-dlq
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  InputValidateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-input-validate-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}/*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups; S3 action is limited to one bucket"
+
+  InputValidate:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-input-validate"
+      Description: Validates the input given to the workflow
+      Handler: index.handler
+      Role: !GetAtt InputValidateRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "input-validate.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          WorkflowName: !Sub "${EnvironmentName}-${ProjectName}"
+          Source: !Ref SourceBucket
+          Destination: !Ref DestinationBucket
+          FrameCapture: !Ref FrameCapture
+          ArchiveSource: !Ref Glacier
+          MediaConvert_Template_2160p: !If
+            - IsMediaPackageEnabled
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_2160p_Avc_Aac_16x9_mvod"
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_2160p_Avc_Aac_16x9_qvbr"
+          MediaConvert_Template_1080p: !If
+            - IsMediaPackageEnabled
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_1080p_Avc_Aac_16x9_mvod"
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_1080p_Avc_Aac_16x9_qvbr"
+          MediaConvert_Template_720p: !If
+            - IsMediaPackageEnabled
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_720p_Avc_Aac_16x9_mvod"
+            - !Sub "${EnvironmentName}-${ProjectName}_Ott_720p_Avc_Aac_16x9_qvbr"
+          CloudFront: !Ref CloudFrontDomainName
+          EnableMediaPackage: !Ref EnableMediaPackage
+          InputRotate: AUTO
+          EnableSns: !Ref EnableSns
+          EnableSqs: "false"
+          AcceleratedTranscoding: !Ref AcceleratedTranscoding
+          LambdasVersion: !Ref LambdasVersion
+
+  InputValidateErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-input-validate-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-input-validate has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-input-validate"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  InputValidateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InputValidate}"
+      RetentionInDays: 30
+
+  MediainfoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-mediainfo-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}/*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is limited to one S3 bucket"
+
+  Mediainfo:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-mediainfo"
+      Description: Runs mediainfo on a pre-signed S3 URL
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt MediainfoRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "mediainfo.zip"
+      Runtime: python3.7
+      Timeout: 120
+      Environment:
+        Variables:
+          LambdasVersion: !Ref LambdasVersion
+
+  MediainfoErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-mediainfo-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-mediainfo has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-mediainfo"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  MediainfoLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Mediainfo}"
+      RetentionInDays: 30
+
+  DynamoUpdateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-dynamo-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  DynamodbUpdate:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-dynamo"
+      Description: Updates DynamoDB with event data
+      Handler: index.handler
+      Role: !GetAtt DynamoUpdateRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "dynamo.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          DynamoDBTable: !Ref DynamoDBTableName
+          LambdasVersion: !Ref LambdasVersion
+
+  DynamodbUpdateErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-dynamo-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-dynamo has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-dynamo"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  DynamodbUpdateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${DynamodbUpdate}"
+      RetentionInDays: 30
+
+  ProfilerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-profiler-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  Profiler:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-profiler"
+      Description: Sets an EncodeProfile based on mediainfo output
+      Handler: index.handler
+      Role: !GetAtt ProfilerRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "profiler.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          DynamoDBTable: !Ref DynamoDBTableName
+          LambdasVersion: !Ref LambdasVersion
+
+  ProfilerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-profiler-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-profiler has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-profiler"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  ProfilerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Profiler}"
+      RetentionInDays: 30
+
+  EncodeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-encode-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - mediaconvert:CreateJob
+                  - mediaconvert:GetJobTemplate
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:mediaconvert:${AWS::Region}:${AWS::AccountId}:*"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt MediaConvertRole.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups; MediaConvert job ids are randomly generated"
+
+  Encode:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-encode"
+      Description: Creates a MediaConvert encode job
+      Handler: index.handler
+      Role: !GetAtt EncodeRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "encode.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          MediaConvertRole: !GetAtt MediaConvertRole.Arn
+          EndPoint: !GetAtt MediaConvertEndPoint.EndpointUrl
+          TranscodeAssetsBucket: !Sub ${TranscodeAssetsBucket}
+          LambdasVersion: !Ref LambdasVersion
+          MediaConvertJobQueueNames: !Ref MediaConvertJobQueueNames
+
+  EncodeErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-encode-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-encode has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-encode"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  EncodeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${Encode}"
+      RetentionInDays: 30
+
+  OutputValidateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-output-validate-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${DestinationBucket}"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  OutputValidate:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-output-validate"
+      Description: Parses MediaConvert job output
+      Handler: index.handler
+      Role: !GetAtt OutputValidateRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "output-validate.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          DynamoDBTable: !Ref DynamoDBTableName
+          EndPoint: !GetAtt MediaConvertEndPoint.EndpointUrl
+          LambdasVersion: !Ref LambdasVersion
+
+  OutputValidateErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-output-validate-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-output-validate has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-output-validate"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  OutputValidateLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${OutputValidate}"
+      RetentionInDays: 30
+
+  ArchiveSourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-archive-source-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObjectTagging
+                Resource:
+                  - !Sub "arn:aws:s3:::${SourceBucket}/*"
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups; S3 action is limited to one bucket"
+
+  ArchiveSource:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-archive-source"
+      Description: Updates tags on source files to enable Glacier
+      Handler: index.handler
+      Role: !GetAtt ArchiveSourceRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "archive-source.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          LambdasVersion: !Ref LambdasVersion
+
+  ArchiveSourceErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-archive-source-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-archive-source has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-archive-source"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  ArchiveSourceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ArchiveSource}"
+      RetentionInDays: 30
+
+  SnsNotificationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-sns-notification-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref SnsTopic
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  SnsNotification:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-sns-notification"
+      Description: Sends a notification when the encode job is completed
+      Handler: index.handler
+      Role: !GetAtt SnsNotificationRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "sns-notification.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          SnsTopic: !Ref SnsTopic
+          LambdasVersion: !Ref LambdasVersion
+
+  SnsNotificationErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-sns-notification-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-sns-notification has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-sns-notification"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  SnsNotificationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SnsNotification}"
+      RetentionInDays: 30
+
+  MediaPackageAssetsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-media-package-assets-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${EnvironmentName}-${ProjectName}-error-handler"
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt MediaPackageVodRole.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+              - Effect: Allow
+                Action:
+                  - mediapackage-vod:CreateAsset
+                Resource: "*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups; MediaPackage action that does not support resource level permissions"
+
+  MediaPackageAssets:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-media-package-assets"
+      Description: Ingests an asset into MediaPackage-VOD
+      Handler: index.handler
+      Role: !GetAtt MediaPackageAssetsRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "media-package-assets.zip"
+      Runtime: nodejs16.x
+      Timeout: 300
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          GroupId: !GetAtt MediaPackageVod.GroupId
+          GroupDomainName: !GetAtt MediaPackageVod.GroupDomainName
+          MediaPackageVodRole: !GetAtt MediaPackageVodRole.Arn
+          LambdasVersion: !Ref LambdasVersion
+
+  MediaPackageAssetsErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-media-package-assets-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-media-package-assets has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-media-package-assets"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  MediaPackageAssetsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${MediaPackageAssets}"
+      RetentionInDays: 30
+
+  ErrorHandlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-error-handler-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref SnsTopic
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*"
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: "* is used so that the Lambda function can create log groups"
+
+  ErrorHandler:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${EnvironmentName}-${ProjectName}-error-handler"
+      Description: Captures and processes workflow errors
+      Handler: index.handler
+      Role: !GetAtt ErrorHandlerRole.Arn
+      Code:
+        S3Bucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        S3Key: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "error-handler.zip"
+      Runtime: nodejs16.x
+      Timeout: 120
+      Environment:
+        Variables:
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
+          DynamoDBTable: !Ref DynamoDBTableName
+          SnsTopic: !Ref SnsTopic
+          LambdasVersion: !Ref LambdasVersion
+
+  ErrorHandlerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-error-handler-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-error-handler has too many errors."
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub "${EnvironmentName}-${ProjectName}-error-handler"
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  ErrorHandlerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ErrorHandler}"
+      RetentionInDays: 30
+
+  FailureRetryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: !Sub "${EnvironmentName}-${ProjectName}-failure-retry-role"
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-ingest"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-process"
+                  - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${EnvironmentName}-${ProjectName}-publish"
+
+  FailureRetryLambda:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/lambda/lambda.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        FunctionName: !Sub ${ProjectName}-retry
+        AlarmTarget: !Ref AlarmTarget
+        Description: Retries failed state machine executions
+        Runtime: nodejs16.x
+        Timeout: 120
+        MemorySize: 128
+        Handler: index.handler
+        CodeBucket: !FindInMap ["SourceCode", "General", "S3Bucket"]
+        CodeKey: !Join
+          - "/"
+          - - !FindInMap ["SourceCode", "General", "KeyPrefix"]
+            - !Ref LambdasVersion
+            - "failure-retry.zip"
+        ErrorAlarmThreshold: 3
+        Role: !Ref FailureRetryRole
+
+  IngestWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${EnvironmentName}-${ProjectName}-ingest"
+      DefinitionString: !Sub |
+        {
+          "StartAt": "Input Validate",
+          "States": {
+            "Input Validate": {
+              "Type": "Task",
+              "Resource": "${InputValidate.Arn}",
+              "Next": "Mediainfo",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "Mediainfo": {
+              "Type": "Task",
+              "Resource": "${Mediainfo.Arn}",
+              "Next": "DynamoDB Update",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "DynamoDB Update": {
+              "Type": "Task",
+              "Resource": "${DynamodbUpdate.Arn}",
+              "Next": "SNS Choice",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "SNS Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.enableSns",
+                  "BooleanEquals": true,
+                  "Next": "SNS Notification"
+                }
+              ],
+              "Default": "Process Execute"
+            },
+            "SNS Notification": {
+              "Type": "Task",
+              "Resource": "${SnsNotification.Arn}",
+              "Next": "Process Execute",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "Process Execute": {
+              "Type": "Task",
+              "Resource": "${StepFunctionsWithoutDLQ.Arn}",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "CatchFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sqs:sendMessage",
+              "Parameters": {
+                "QueueUrl": "${FailureRetryLambda.Outputs.DeadLetterQueueUrl}",
+                "MessageBody.$": "$$",
+                "MessageAttributes": {
+                  "guid": {
+                    "DataType": "String",
+                    "StringValue.$": "$.guid"
+                  },
+                  "error": {
+                    "DataType": "String",
+                    "StringValue.$": "$.error.Cause"
+                  },
+                  "execution-id": {
+                    "DataType": "String",
+                    "StringValue.$": "$$.Execution.Id"
+                  },
+                  "lambdas-version": {
+                    "DataType": "String",
+                    "StringValue": "${LambdasVersion}"
+                  }
+                }
+              },
+              "Next": "Fail"
+            },
+            "Fail": {
+              "Type": "Fail"
+            }
+          }
+        }
+      RoleArn: !GetAtt StepFunctionsServiceRole.Arn
+
+  IngestWorkflowErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-ingest-workflow-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-ingest-workflow has too many errors."
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref IngestWorkflow
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  ProcessWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${EnvironmentName}-${ProjectName}-process"
+      DefinitionString: !Sub |
+        {
+          "Comment": "Process StateMachine to create MediaConvert Encoding Jobs",
+          "StartAt": "Profiler",
+          "States": {
+            "Profiler": {
+              "Type": "Task",
+              "Resource": "${Profiler.Arn}",
+              "Next": "Encoding Profile Check",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "Encoding Profile Check": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.isCustomTemplate",
+                  "BooleanEquals": true,
+                  "Next": "Custom jobTemplate"
+                },
+                        {
+                  "Variable": "$.encodingProfile ",
+                  "NumericEquals": 2160,
+                  "Next": "jobTemplate 2160p"
+                },
+                {
+                  "Variable": "$.encodingProfile ",
+                  "NumericEquals": 1080,
+                  "Next": "jobTemplate 1080p"
+                },
+                {
+                  "Variable": "$.encodingProfile ",
+                  "NumericEquals": 720,
+                  "Next": "jobTemplate 720p"
+                }
+              ]
+            },
+            "jobTemplate 2160p": {
+              "Type": "Pass",
+              "Next": "Accelerated Transcoding Check"
+            },
+            "jobTemplate 1080p": {
+              "Type": "Pass",
+              "Next": "Accelerated Transcoding Check"
+            },
+            "jobTemplate 720p": {
+              "Type": "Pass",
+              "Next": "Accelerated Transcoding Check"
+            },
+            "Custom jobTemplate": {
+              "Type": "Pass",
+              "Next": "Accelerated Transcoding Check"
+            },
+            "Accelerated Transcoding Check": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.acceleratedTranscoding",
+                  "StringEquals": "ENABLED",
+                  "Next": "Enabled"
+                },
+                {
+                  "Variable": "$.acceleratedTranscoding",
+                  "StringEquals": "PREFERRED",
+                  "Next": "Preferred"
+                },
+                {
+                  "Variable": "$.acceleratedTranscoding",
+                  "StringEquals": "DISABLED",
+                  "Next": "Disabled"
+                }
+              ]
+            },
+            "Enabled": {
+              "Type": "Pass",
+              "Next": "Frame Capture Check"
+            },
+            "Preferred": {
+              "Type": "Pass",
+              "Next": "Frame Capture Check"
+            },
+            "Disabled": {
+              "Type": "Pass",
+              "Next": "Frame Capture Check"
+            },
+            "Frame Capture Check": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.frameCapture",
+                  "BooleanEquals": true,
+                  "Next": "Frame Capture"
+                },
+                {
+                  "Variable": "$.frameCapture",
+                  "BooleanEquals": false,
+                  "Next": "No Frame Capture"
+                }
+              ]
+            },
+            "Frame Capture": {
+              "Type": "Pass",
+              "Next": "Encode Job Submit"
+            },
+            "No Frame Capture": {
+              "Type": "Pass",
+              "Next": "Encode Job Submit"
+            },
+            "Encode Job Submit": {
+              "Type": "Task",
+              "Resource": "${Encode.Arn}",
+              "Next": "DynamoDB Update",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "TooManyRequestsException",
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "DynamoDB Update": {
+              "Type": "Task",
+              "Resource": "${DynamodbUpdate.Arn}",
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "CatchFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sqs:sendMessage",
+              "Parameters": {
+                "QueueUrl": "${FailureRetryLambda.Outputs.DeadLetterQueueUrl}",
+                "MessageBody.$": "$$",
+                "MessageAttributes": {
+                  "guid": {
+                    "DataType": "String",
+                    "StringValue.$": "$.guid"
+                  },
+                  "error": {
+                    "DataType": "String",
+                    "StringValue.$": "$.error.Cause"
+                  },
+                  "execution-id": {
+                    "DataType": "String",
+                    "StringValue.$": "$$.Execution.Id"
+                  },
+                  "lambdas-version": {
+                    "DataType": "String",
+                    "StringValue": "${LambdasVersion}"
+                  }
+                }
+              },
+              "Next": "Fail"
+            },
+            "Fail": {
+              "Type": "Fail"
+            }
+          }
+        }
+      RoleArn: !GetAtt StepFunctionsServiceRole.Arn
+
+  ProcessWorkflowErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-process-workflow-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-process-workflow has too many errors."
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref ProcessWorkflow
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  PublishWorkflow:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${EnvironmentName}-${ProjectName}-publish"
+      DefinitionString: !Sub |
+        {
+          "StartAt": "Validate Encoding Outputs",
+          "States": {
+            "Validate Encoding Outputs": {
+              "Type": "Task",
+              "Resource": "${OutputValidate.Arn}",
+              "Next": "Archive Source Choice",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ]
+            },
+            "Archive Source Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.archiveSource",
+                  "StringEquals": "GLACIER",
+                  "Next": "Archive"
+                },
+                {
+                  "Variable": "$.archiveSource",
+                  "StringEquals": "DEEP_ARCHIVE",
+                  "Next": "Deep Archive"
+                }
+              ],
+              "Default": "MediaPackage Choice"
+            },
+            "Archive": {
+              "Type": "Task",
+              "Resource": "${ArchiveSource.Arn}",
+              "Next": "MediaPackage Choice",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "Deep Archive": {
+              "Type": "Task",
+              "Resource": "${ArchiveSource.Arn}",
+              "Next": "MediaPackage Choice",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "MediaPackage Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.enableMediaPackage",
+                  "BooleanEquals": true,
+                  "Next": "MediaPackage Assets"
+                }
+              ],
+              "Default": "DynamoDB Update"
+            },
+            "MediaPackage Assets": {
+              "Type": "Task",
+              "Resource": "${MediaPackageAssets.Arn}",
+              "Next": "DynamoDB Update",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "DynamoDB Update": {
+              "Type": "Task",
+              "Resource": "${DynamodbUpdate.Arn}",
+              "Next": "SNS Choice",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "SNS Choice": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.enableSns",
+                  "BooleanEquals": true,
+                  "Next": "SNS Notification"
+                }
+              ],
+              "Default": "Complete"
+            },
+            "SNS Notification": {
+              "Type": "Task",
+              "Resource": "${SnsNotification.Arn}",
+              "Next": "Complete",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 4,
+                  "MaxAttempts": 11,
+                  "BackoffRate": 1.5
+                },
+                {
+                  "ErrorEquals": [
+                    "States.ALL"
+                  ],
+                  "IntervalSeconds": 60,
+                  "MaxAttempts": 2,
+                  "BackoffRate": 1.0
+                }
+              ],
+              "Catch": [
+                {
+                  "ErrorEquals": ["States.ALL"],
+                  "ResultPath": "$.error",
+                  "Next": "CatchFailure"
+                }
+              ]
+            },
+            "Complete": {
+              "Type": "Pass",
+              "End": true
+            },
+            "CatchFailure": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::sqs:sendMessage",
+              "Parameters": {
+                "QueueUrl": "${FailureRetryLambda.Outputs.DeadLetterQueueUrl}",
+                "MessageBody.$": "$$",
+                "MessageAttributes": {
+                  "guid": {
+                    "DataType": "String",
+                    "StringValue.$": "$.guid"
+                  },
+                  "error": {
+                    "DataType": "String",
+                    "StringValue.$": "$.error.Cause"
+                  },
+                  "execution-id": {
+                    "DataType": "String",
+                    "StringValue.$": "$$.Execution.Id"
+                  },
+                  "lambdas-version": {
+                    "DataType": "String",
+                    "StringValue": "${LambdasVersion}"
+                  }
+                }
+              },
+              "Next": "Fail"
+            },
+            "Fail": {
+              "Type": "Fail"
+            }
+          }
+        }
+      RoleArn: !GetAtt StepFunctionsServiceRole.Arn
+
+  PublishWorkflowErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${ProjectName}-publish-workflow-error
+      AlarmDescription: !Sub "low: lambda: ${EnvironmentName}-${ProjectName}-publish-workflow has too many errors."
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      Period: 300
+      EvaluationPeriods: 1
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref PublishWorkflow
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+Outputs:
+  #
+  SnsTopicArn:
+    Description: SNS Notification Topic Arn
+    Value: !Ref SnsTopic

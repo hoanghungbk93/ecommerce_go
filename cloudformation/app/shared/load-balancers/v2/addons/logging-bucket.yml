@@ -1,0 +1,113 @@
+---
+Parameters:
+
+  Namespace:
+    Type: String
+
+  LoadBalancerName:
+    Type: String
+
+  LoggingEnabledTagValue:
+    Type: String
+    Default: false
+    AllowedValues: [false, true]
+
+Outputs:
+  BucketName:
+    Value: !Ref LoggingBucket
+  BucketArn:
+    Value: !GetAtt LoggingBucket.Arn
+
+Resources:
+
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Status: Enabled
+            ExpirationInDays: 365
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: Glacier
+      Tags:
+        - Key: Name
+          Value: !Sub ${Namespace}-${LoadBalancerName}-logs
+        - Key: LoggingEnabled
+          Value: !Ref LoggingEnabledTagValue
+
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:Get*
+              - s3:List*
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}
+              - !Sub arn:aws:s3:::${LoggingBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+          - Effect: Allow
+            Action:
+              - s3:Put*
+            Resource:
+              - !Sub >-
+                  arn:aws:s3:::${LoggingBucket}/${Namespace}-${LoadBalancerName}/*
+            Principal:
+              AWS:
+                - !FindInMap
+                  - ELBLogAccountByRegion
+                  - !Ref 'AWS::Region'
+                  - AccountId
+
+Mappings:
+  ELBLogAccountByRegion:
+    ap-southeast-1:
+      AccountId: '127311923021'
+    us-east-2:
+      AccountId: '033677994240'
+    us-west-1:
+      AccountId: '027434742980'
+    us-west-2:
+      AccountId: '797873946194'
+    ca-central-1:
+      AccountId: '985666609251'
+    eu-central-1:
+      AccountId: '054676820928'
+    eu-west-1:
+      AccountId: '156460612806'
+    eu-west-2:
+      AccountId: '652711504416'
+    eu-west-3:
+      AccountId: '009996457667'
+    ap-northeast-1:
+      AccountId: '582318560864'
+    ap-northeast-2:
+      AccountId: '600734575887'
+    ap-northeast-3:
+      AccountId: '383597477331'
+    ap-southeast-1:
+      AccountId: '114774131450'
+    ap-southeast-2:
+      AccountId: '783225319266'
+    ap-south-1:
+      AccountId: '718504428378'
+    sa-east-1:
+      AccountId: '507241528517'
+    us-gov-west-1:
+      AccountId: '048591011584'
+    cn-north-1:
+      AccountId: '638102146993'
+    cn-northwest-1:
+      AccountId: '037604701340'
+
+
+# vim: set ft=yaml.cloudformation :

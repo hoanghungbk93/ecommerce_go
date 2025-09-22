@@ -1,0 +1,226 @@
+Description: Creates a Regional Web Application Firewall version 2 with auto and manual block ipsets rules on an ALB resource
+
+
+Parameters:
+
+  Namespace:
+    Type: String
+
+  LoadBalancerArn:
+    Type: String
+
+  LoadBalancerName:
+    Type: String
+
+  WebACLName:
+    Type: String
+    Default: ""
+
+  Ipv4AllowedCidrs:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: List of IPv4 CIDRs that are added to the WAFv2 IPSet ManualAllowIPSetIpv4
+
+  Ipv6AllowedCidrs:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: List of IPv6 CIDRs that are added to the WAFv2 IPSet ManualAllowIPSetIpv6
+
+
+Conditions:
+  HasWebACLName: !Not [!Equals [!Ref WebACLName, ""]]
+  HasIpv4AllowedCidrs: !Not [!Equals [!Join [",", !Ref Ipv4AllowedCidrs], ""]]
+  HasIpv6AllowedCidrs: !Not [!Equals [!Join [",", !Ref Ipv6AllowedCidrs], ""]]
+
+Resources:
+
+  ManualAllowIPSetIpv4:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: !If
+      - HasIpv4AllowedCidrs
+      - !Split
+        - ","
+        - !Join [",", !Ref Ipv4AllowedCidrs]
+      - []
+      Description: !Sub Manual allow ipv4 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV4
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual-allow-ipv4
+      Scope: REGIONAL
+
+  ManualBlockIPSetIpv4:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: []
+      Description: !Sub Manual block ipv4 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV4
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual-ipv4
+      Scope: REGIONAL
+
+  AutoBlockIPSetIpv4:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: []
+      Description: !Sub Auto block ipv4 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV4
+      Name: !Sub ${Namespace}-${LoadBalancerName}-auto-ipv4
+      Scope: REGIONAL
+
+# NOTE: IPv6
+# This template has IPv6 resources and references to the IPv6 resources but LTK is not utilizing IPv6 yet
+# The IPv6 resources are stubs for when LTK does support IPv6
+# https://github.com/rewardStyle/aws-waf-lambda started the road to support for IPv6 but it has not been finished
+
+  ManualAllowIPSetIpv6:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: !If
+      - HasIpv6AllowedCidrs
+      - !Split
+        - ","
+        - !Join [",", !Ref Ipv6AllowedCidrs]
+      - []
+      Description: !Sub Manual allow ipv6 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV6
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual-allow-ipv6
+      Scope: REGIONAL
+
+  ManualBlockIPSetIpv6:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: []
+      Description: !Sub Manual block ipv6 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV6
+      Name: !Sub ${Namespace}-${LoadBalancerName}-manual-ipv6
+      Scope: REGIONAL
+
+  AutoBlockIPSetIpv6:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Addresses: []
+      Description: !Sub Auto block ipv6 addresses for ${Namespace}-${LoadBalancerName}
+      IPAddressVersion: IPV6
+      Name: !Sub ${Namespace}-${LoadBalancerName}-auto-ipv6
+      Scope: REGIONAL
+
+  WafV2WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      DefaultAction:
+        Allow: {}
+      Description: This will block traffic from countries and regions contained in the USA Embargo along with abusers
+      Name: !If
+        - HasWebACLName
+        - !Ref WebACLName
+        - !Sub ${Namespace}-${LoadBalancerName}
+      Rules:
+        - Name: UsaEmbargoCountriesAndRegions
+          Priority: 0
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: UsaEmbargoCountryRegionalGeoMatchMetric
+          Statement:
+            RuleGroupReferenceStatement:
+              Arn: !ImportValue WafV2RegionalRuleGroupUsaEmbargoARN
+        - Name: ManualBlockRule
+          Priority: 1
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: Abusers_ManualBlockRule
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt ManualBlockIPSetIpv4.Arn
+        - Name: AutoBlockRule
+          Priority: 2
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: Abusers_AutoBlockRule
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt AutoBlockIPSetIpv4.Arn
+        - Name: AWS-AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 3
+          OverrideAction:
+            None: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AWSManagedRulesKnownBadInputs
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+      Scope: REGIONAL
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: Abusers
+
+  WafV2WebACLAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    Properties:
+      ResourceArn: !Ref LoadBalancerArn
+      WebACLArn: !GetAtt WafV2WebAcl.Arn
+
+Outputs:
+
+  WebACLId:
+    Description: Id of the web acl
+    Value: !GetAtt WafV2WebAcl.Id
+
+  AutoBlockIPv4SetArn:
+    Description: Arn of the auto blocking IPSet
+    Value: !GetAtt AutoBlockIPSetIpv4.Arn
+
+  ManualBlockIPv4SetArn:
+    Description: Arn of the manual blocking IPSet
+    Value: !GetAtt ManualBlockIPSetIpv4.Arn
+
+  AutoBlockIPv6SetArn:
+    Description: Id of the auto blocking IPSet
+    Value: !GetAtt AutoBlockIPSetIpv6.Arn
+
+  ManualBlockIPv6SetArn:
+    Description: Id the manual blocking IPSet
+    Value: !GetAtt ManualBlockIPSetIpv6.Arn
+
+  ManualAllowIPv6SetArn:
+    Description: Id the manual allow IPSet
+    Value: !GetAtt ManualAllowIPSetIpv6.Arn
+
+  ManualAllowIPv4SetArn:
+    Description: Id the manual allow IPSet
+    Value: !GetAtt ManualAllowIPSetIpv4.Arn
+
+  AutoBlockIPv4Set:
+    Description: The resource name, physical ID, and scope of the auto blocking IPSet
+    Value: !Ref AutoBlockIPSetIpv4
+
+  ManualBlockIPv4Set:
+    Description: The resource name, physical ID, and scope of the manual blocking IPSet
+    Value: !Ref ManualBlockIPSetIpv4
+
+  AutoBlockIPv6Set:
+    Description: The resource name, physical ID, and scope of the auto blocking IPSet
+    Value: !Ref AutoBlockIPSetIpv6
+
+  ManualBlockIPv6Set:
+    Description: The resource name, physical ID, and scope of the manual blocking IPSet
+    Value: !Ref ManualBlockIPSetIpv6
+
+  ManualAllowIPv4Set:
+    Description: The resource name, physical ID, and scope of the manual allow IPSet
+    Value: !Ref ManualAllowIPSetIpv4
+
+  ManualAllowIPv6Set:
+    Description: The resource name, physical ID, and scope of the manual allow IPSet
+    Value: !Ref ManualAllowIPSetIpv6

@@ -1,0 +1,26 @@
+Description: Creates the resources necessary to enable a vertical on the ltk-ops deployment pipeline.
+
+Parameters:
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedValues: [ltk, tools, disco]
+
+Resources:
+
+  #ECR:
+  #  Type: AWS::CloudFormation::Stack
+  #  Properties:
+  #    TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/${VerticalName}/vertical/ecr.yml
+  #    Tags:
+  #      - Key: Vertical
+  #        Value: !Ref VerticalName
+
+  S3:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/${VerticalName}/vertical/buckets.yml
+      Tags:
+        - Key: Vertical
+          Value: !Ref VerticalName

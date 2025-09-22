@@ -1,0 +1,109 @@
+---
+Description: >-
+  Triggers an alarm based on ratio of errors during lambda invocations.
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+  VerticalName:
+    Type: String
+  FunctionName:
+    Type: String
+  Threshold:
+    Type: Number
+    Description: >-
+      Percentage at which this alarm should be triggered by <MetricName>
+    Default: 10
+    MaxValue: 100
+    MinValue: 0
+  EvaluationPeriods:
+    Type: Number
+    Default: 5
+  Period:
+    Type: Number
+    Default: 300
+  Urgency:
+    Type: String
+    Description: >-
+      Override urgency for this alarm
+    Default: ""
+    AllowedValues: ["", critical, low]
+
+  ComparisonOperator:
+    Type: String
+    Default: GreaterThanThreshold
+    AllowedValues:
+      - GreaterThanOrEqualToThreshold
+      - GreaterThanThreshold
+      - GreaterThanUpperThreshold
+      - LessThanLowerOrGreaterThanUpperThreshold
+      - LessThanLowerThreshold
+      - LessThanOrEqualToThreshold
+      - LessThanThreshold
+
+  TreatMissingData:
+    Type: String
+    Default: notBreaching
+    AllowedValues:
+      - breaching
+      - notBreaching
+      - ignore
+      - missing
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+  HasUrgencyOverride: !Not [!Equals [!Ref Urgency, ""]]
+
+Resources:
+
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      Metrics:
+        - Id: errorRate
+          Label: ErrorRate
+          Expression: >-
+            (errors/invocations) * 100
+          ReturnData: true
+        - Id: errors
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Errors
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref FunctionName
+            Stat: Sum
+            Period: !Ref Period
+          ReturnData: false
+        - Id: invocations
+          MetricStat:
+            Metric:
+              Namespace: AWS/Lambda
+              MetricName: Invocations
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Ref FunctionName
+            Stat: Sum
+            Period: !Ref Period
+          ReturnData: false
+      TreatMissingData: !Ref TreatMissingData
+      EvaluationPeriods: !Ref EvaluationPeriods
+      ComparisonOperator: !Ref ComparisonOperator
+      Threshold: !Ref Threshold
+      OKActions:
+        - Fn::ImportValue: !Sub
+            - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+            - Urgency: !If
+                - HasUrgencyOverride
+                - !Ref Urgency
+                - !If [IsEnvProd, critical, low]
+      AlarmActions:
+        - Fn::ImportValue: !Sub
+            - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+            - Urgency: !If
+                - HasUrgencyOverride
+                - !Ref Urgency
+                - !If [IsEnvProd, critical, low]
+
+# vim: set ft=yaml.cloudformation :

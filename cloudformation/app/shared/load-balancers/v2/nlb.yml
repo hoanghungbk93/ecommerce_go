@@ -1,0 +1,168 @@
+---
+
+Parameters:
+
+  ServiceName:
+    Type: String
+
+  EnvironmentName:
+    Type: String
+
+  Scheme:
+    Type: String
+    AllowedValues: [internal, private, internet-facing, public]
+    Default: internet-facing
+
+  DomainName:
+    Type: String
+    Default: ''
+    Description: >-
+      The domain fo
+
+  DNSName:
+    Description: >
+      The name of the alias created for the ALB. This parameter will be ignored
+      if CreateDNS is false. If not specified, the name of the load balancer is
+      be used.
+    Type: String
+    Default: ""
+
+
+Conditions:
+  HasCustomDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  IsPublic: !Or
+    - !Equals [!Ref Scheme, internet-facing]
+    - !Equals [!Ref Scheme, public]
+  IsAccessLoggingEnabled: !And
+    - !Condition IsPublic
+    - !Equals [!Ref EnvironmentName, 'prod']
+#  IsPrivate: !Or
+#    - !Equals [!Ref Scheme, internal]
+#    - !Equals [!Ref Scheme, private]
+
+Mappings:
+  Inventory:
+    CloudFormation:
+      BaseURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared
+
+Resources:
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: network
+      Subnets: !Split
+        - ","
+        - Fn::ImportValue: !Sub
+            - '${EnvironmentName}:stacksets:v2:env:vpc:${SubnetType}-subnets'
+            - SubnetType: !If [IsPublic, public, private]
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: 'false'
+        - Key: deletion_protection.enabled
+          Value: 'false'
+        - Key: access_logs.s3.enabled
+          Value: !If [IsAccessLoggingEnabled, 'true', 'false']
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.bucket
+            Value: 'elb-logs-va'
+          - !Ref AWS::NoValue
+        - !If
+          - IsAccessLoggingEnabled
+          - Key: access_logs.s3.prefix
+            Value: !Sub ${EnvironmentName}-${ServiceName}
+          - !Ref AWS::NoValue
+
+  WebListeners:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/load-balancers/v2/components/nlb/web-listeners.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+      Parameters:
+        LoadBalancerArn: !Ref LoadBalancer
+        CertificateDomainName: !If
+          - IsPublic
+          - !Ref DomainName
+          - !Ref AWS::NoValue
+        TargetGroupArn: !Ref DummyTargetGroup
+
+  DummyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: TCP
+      VpcId:
+        Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:id
+
+  RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: !Sub >-
+        DNS for external communication to the ${LoadBalancer.LoadBalancerName}
+        ALB.
+      HostedZoneName: !Join ["", [!Ref DomainName, "."]]
+      Name: !Join
+        - ""
+        - - !Join
+            - "-"
+            - - !Ref EnvironmentName
+              - !If [HasCustomDNSName, !Ref DNSName, !Ref ServiceName]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt LoadBalancer.DNSName
+        HostedZoneId: !GetAtt LoadBalancer.CanonicalHostedZoneID
+
+  LegacyHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/load-balancer/${ServiceName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref RecordSet
+
+  LoadBalancerHostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/${ServiceName}/load-balancer/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !Ref RecordSet
+
+  LoadBalancerDNSNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/${ServiceName}/load-balancer/dns-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.DNSName
+
+  LoadBalancerFullNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/${ServiceName}/load-balancer/full-name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.LoadBalancerFullName
+
+  LoadBalancerNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/${ServiceName}/load-balancer/name
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt LoadBalancer.LoadBalancerName
+
+Outputs:
+
+  DummyTargetGroupArn:
+    Description: The ARN of the dummy target group for this load balancer
+    Value: !Ref DummyTargetGroup
+    Export:
+      Name: !Sub ${EnvironmentName}:service:v2:${ServiceName}:dummy-target-group
+
+# vim: set ft=yaml.cloudformation :

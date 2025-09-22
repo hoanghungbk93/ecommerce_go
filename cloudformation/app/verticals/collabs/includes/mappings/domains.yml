@@ -1,0 +1,10 @@
+---
+Public:
+  dev: rscollaborationsdev.com
+  qa: rewardstyle.com
+  prod: rewardstyle.com
+
+Private:
+  dev: collabs.local
+  qa: qa.collabs.local
+  prod: prod.collabs.local

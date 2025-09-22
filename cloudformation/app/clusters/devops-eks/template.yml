@@ -1,0 +1,45 @@
+---
+Parameters:
+  VerticalName:
+    Type: String
+    Default: devops
+
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates
+      GitSha: 98f5786bd48f3240bb1e5ef9eac97eefa7c1206f
+
+Resources:
+
+  Cluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/${GitSha}/shared/eks/cluster.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+          GitSha: !FindInMap [Inventory, CloudFormation, GitSha]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ClusterName: !Sub ${EnvironmentName}-devops
+        KubernetesVersion: '1.10'
+
+  NodeGroup1:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/${GitSha}/shared/eks/nodegroup.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+          GitSha: !FindInMap [Inventory, CloudFormation, GitSha]
+      Parameters:
+        VerticalName: !Ref VerticalName
+        EnvironmentName: !Ref EnvironmentName
+        NodeInstanceType: t2.medium
+        NodeGroupName: test1
+        EnableVerticalTaint: false
+        ClusterName: !GetAtt Cluster.Outputs.ClusterName
+        ClusterControlPlaneSecurityGroup: !GetAtt Cluster.Outputs.ControlPlaneSecurityGroup

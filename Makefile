@@ -1,4 +1,4 @@
-.PHONY: help dev-deploy-permanent dev-deploy-app dev-setup-ssm dev-deploy-all check-aws-account create-ecr validate-ecr list-ecr build-backend build-frontend dev-build-backend dev-build-frontend-with-api push-backend-image push-images health-check logs teardown demodata start stop
+.PHONY: help dev-deploy-permanent dev-deploy-app dev-setup-ssm dev-deploy-all check-aws-account create-ecr validate-ecr list-ecr build-backend build-frontend dev-build-backend dev-build-frontend-with-api push-backend-image push-images health-check logs teardown demodata start stop delete create update-dns
 
 # Default AWS region
 AWS_REGION ?= ap-southeast-1
@@ -40,8 +40,10 @@ help:
 	@echo "  teardown             - Delete all resources"
 	@echo ""
 	@echo "🔧️  Service Management:"
+	@echo "  create               - Create/update infrastructure"
 	@echo "  start                - Start all AWS services (scale to 1)"
 	@echo "  stop                 - Stop all AWS services (scale to 0)"
+	@echo "  delete               - Delete CloudFormation stack"
 	@echo "  demodata             - Add demo data to AWS database"
 
 # Check AWS credentials and account
@@ -207,19 +209,89 @@ dev-setup-ssm: check-aws-account
 start: check-aws-account
 	@echo "🚀 Starting all AWS services..."
 	@echo "Scaling ECS services to 1..."
-	aws ecs update-service --cluster $(ENV)-ecommerce-cluster --service $(ENV)-ecommerce-backend --desired-count 1 --region $(AWS_REGION)
-	aws ecs update-service --cluster $(ENV)-ecommerce-cluster --service $(ENV)-ecommerce-frontend --desired-count 1 --region $(AWS_REGION)
-	@echo "✅ All services started"
+	@CLUSTER_NAME=$$(aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null || echo ""); \
+	if [ -n "$$CLUSTER_NAME" ]; then \
+		echo "Using cluster: $$CLUSTER_NAME"; \
+		aws ecs update-service --cluster "$$CLUSTER_NAME" --service $(ENV)-ecommerce-backend --desired-count 1 --region $(AWS_REGION); \
+		aws ecs update-service --cluster "$$CLUSTER_NAME" --service $(ENV)-ecommerce-frontend --desired-count 1 --region $(AWS_REGION); \
+		echo "✅ All services started"; \
+	else \
+		echo "❌ Cluster not found. Please check your stack name."; \
+		exit 1; \
+	fi
 	@$(MAKE) health-check
 
 # Stop all AWS services
 stop: check-aws-account
 	@echo "🛑 Stopping all AWS services..."
 	@echo "Scaling ECS services to 0..."
-	aws ecs update-service --cluster $(ENV)-ecommerce-cluster --service $(ENV)-ecommerce-backend --desired-count 0 --region $(AWS_REGION)
-	aws ecs update-service --cluster $(ENV)-ecommerce-cluster --service $(ENV)-ecommerce-frontend --desired-count 0 --region $(AWS_REGION)
-	@echo "✅ All services stopped"
-	@echo "💰 This will save costs while keeping your infrastructure"
+	@CLUSTER_NAME=$$(aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null || echo ""); \
+	if [ -n "$$CLUSTER_NAME" ]; then \
+		echo "Using cluster: $$CLUSTER_NAME"; \
+		aws ecs update-service --cluster "$$CLUSTER_NAME" --service $(ENV)-ecommerce-backend --desired-count 0 --region $(AWS_REGION); \
+		aws ecs update-service --cluster "$$CLUSTER_NAME" --service $(ENV)-ecommerce-frontend --desired-count 0 --region $(AWS_REGION); \
+		echo "✅ All services stopped"; \
+		echo "💰 This will save costs while keeping your infrastructure"; \
+	else \
+		echo "❌ Cluster not found. Please check your stack name."; \
+		exit 1; \
+	fi
+
+# Create/update infrastructure
+create: check-aws-account update-app-params
+	@echo "🚀 Creating/updating infrastructure..."
+	aws cloudformation deploy \
+		--template-file cloudformation/app/template-ec2.yml \
+		--stack-name $(ENV)-ecommerce-ec2-app \
+		--parameter-overrides file://cloudformation/app/$(ENV)-ec2.json \
+		--capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+		--region $(AWS_REGION) \
+		--no-fail-on-empty-changeset
+	@echo "✅ Infrastructure deployed successfully!"
+	@$(MAKE) update-urls
+	@$(MAKE) update-dns
+
+# Update Route53 DNS to point to new ALB
+update-dns: check-aws-account
+	@echo "🌐 Updating DNS configuration..."
+	@DOMAIN_NAME=$$(grep -A 1 '"ParameterKey": "DomainName"' cloudformation/app/$(ENV)-ec2.json | grep '"ParameterValue"' | sed 's/.*"ParameterValue": "\([^"]*\)".*/\1/'); \
+	if [ "$$DOMAIN_NAME" = "none" ]; then \
+		echo "⏭️  Skipping DNS update (DomainName is set to 'none')"; \
+	else \
+		echo "📍 Domain: $$DOMAIN_NAME"; \
+		ALB_DNS=$$(aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`LoadBalancerDNS`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null); \
+		if [ -n "$$ALB_DNS" ]; then \
+			echo "🎯 New ALB: $$ALB_DNS"; \
+			./setup-domain.sh "$$DOMAIN_NAME" $(ENV) ecommerce $(AWS_REGION); \
+			echo "✅ DNS updated successfully!"; \
+		else \
+			echo "❌ Could not get ALB DNS from CloudFormation stack"; \
+		fi; \
+	fi
+
+# Delete CloudFormation stack
+delete: check-aws-account
+	@echo "🗑️  WARNING: This will delete the CloudFormation stack!"
+	@echo "Stack: $(ENV)-ecommerce-ec2-app"
+	@echo ""
+	@read -p "Are you sure you want to delete the stack? [y/N] " confirm && \
+	if [ "$$confirm" = "y" ] || [ "$$confirm" = "Y" ]; then \
+		echo "🛑 Stopping services first..."; \
+		$(MAKE) stop || true; \
+		echo "⏳ Waiting 30 seconds for services to stop..."; \
+		sleep 30; \
+		echo "🗑️  Deleting CloudFormation stack..."; \
+		aws cloudformation delete-stack \
+			--stack-name $(ENV)-ecommerce-ec2-app \
+			--region $(AWS_REGION); \
+		echo "⏳ Waiting for stack deletion to complete..."; \
+		aws cloudformation wait stack-delete-complete \
+			--stack-name $(ENV)-ecommerce-ec2-app \
+			--region $(AWS_REGION); \
+		echo "✅ Stack deleted successfully!"; \
+	else \
+		echo "❌ Deletion cancelled."; \
+	fi
 
 # Add demo data to AWS RDS database
 demodata: check-aws-account
@@ -231,8 +303,8 @@ demodata: check-aws-account
 		exit 1; \
 	fi
 	@echo "Creating demo user account..."
-	$(eval BACKEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
-	$(eval FRONTEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
+	$(eval BACKEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
+	$(eval FRONTEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
 	@if [ -z "$(BACKEND_URL)" ]; then \
 		echo "❌ Backend URL not found. Services might be stopped. Run 'make start' first."; \
 		exit 1; \
@@ -264,7 +336,7 @@ demodata: check-aws-account
 	@echo "   📦 10 Demo Products with images"
 	@echo ""
 	@echo "🌐 Access your application at:"
-	@echo "   $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null)"
+	@echo "   $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null)"
 
 # Build only backend Docker image
 dev-build-backend:
@@ -323,11 +395,12 @@ push-images: validate-ecr build-images
 dev-deploy-app: check-aws-account update-app-params
 	@echo "🚀 Deploying application infrastructure..."
 	aws cloudformation deploy \
-		--template-file cloudformation/app/template.yml \
-		--stack-name $(ENV)-ecommerce-app \
-		--parameter-overrides file://cloudformation/app/$(ENV).json \
-		--capabilities CAPABILITY_NAMED_IAM \
-		--region $(AWS_REGION)
+		--template-file cloudformation/app/template-ec2.yml \
+		--stack-name $(ENV)-ecommerce-ec2-app \
+		--parameter-overrides file://cloudformation/app/$(ENV)-ec2.json \
+		--capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+		--region $(AWS_REGION) \
+		--no-fail-on-empty-changeset
 	@echo "✅ Application deployed"
 	@$(MAKE) update-urls
 
@@ -353,8 +426,8 @@ dev-deploy-all: dev-deploy-permanent dev-setup-ssm create-ecr push-images dev-de
 # Health check
 health-check: check-aws-account
 	@echo "🏥 Checking service health..."
-	$(eval BACKEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
-	$(eval FRONTEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
+	$(eval BACKEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
+	$(eval FRONTEND_URL := $(shell aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null))
 	
 	@if [ ! -z "$(BACKEND_URL)" ]; then \
 		echo "🔍 Testing backend: $(BACKEND_URL)/health"; \
@@ -385,11 +458,16 @@ status: check-aws-account
 	@echo "Permanent Stack:"
 	@aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-permanent --query 'Stacks[0].StackStatus' --output text --region $(AWS_REGION) 2>/dev/null || echo "Not deployed"
 	@echo "App Stack:"
-	@aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-app --query 'Stacks[0].StackStatus' --output text --region $(AWS_REGION) 2>/dev/null || echo "Not deployed"
+	@aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].StackStatus' --output text --region $(AWS_REGION) 2>/dev/null || echo "Not deployed"
 	
 	@echo ""
 	@echo "📊 ECS Service Status:"
-	@aws ecs describe-services --cluster $(ENV)-ecommerce-cluster --services $(ENV)-ecommerce-backend $(ENV)-ecommerce-frontend --query 'services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}' --output table --region $(AWS_REGION) 2>/dev/null || echo "Services not deployed"
+	@CLUSTER_NAME=$$(aws cloudformation describe-stacks --stack-name $(ENV)-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region $(AWS_REGION) 2>/dev/null || echo ""); \
+	if [ -n "$$CLUSTER_NAME" ]; then \
+		aws ecs describe-services --cluster "$$CLUSTER_NAME" --services $(ENV)-ecommerce-backend $(ENV)-ecommerce-frontend --query 'services[*].{Service:serviceName,Status:status,Running:runningCount,Desired:desiredCount}' --output table --region $(AWS_REGION) 2>/dev/null || echo "Services not deployed"; \
+	else \
+		echo "Cluster not found"; \
+	fi
 
 # Teardown all resources
 teardown: check-aws-account

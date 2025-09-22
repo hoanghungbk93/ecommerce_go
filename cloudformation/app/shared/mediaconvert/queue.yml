@@ -1,0 +1,114 @@
+Description: Created an on-demand mediaconvert work queue. Cloudformation cannot create reserved queues
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the MediaConvert Job Queue. This should be lower
+      cased as the vertical name is used in the naming convention of various resources.
+    Type: String
+
+  QueueName:
+    Description: The name of the queue to be created
+    Type: String
+
+  ErrorAlarmThreshold:
+    Description: The value against which the error metric is compared.
+    Type: Number
+    Default: 1
+
+  ErrorAlarmPeriod:
+    Description: The number of seconds over which the error metric is sampled.
+    Type: Number
+    Default: 300
+
+  ErrorAlarmEvaluationPeriods:
+    Description: The number of periods over which the data is compared to the threshold.
+    Type: Number
+    Default: 1
+
+  StandbyTimeThreshold:
+    Description: The value in milliseconds against which the standby time metric is compared.
+    Type: Number
+    Default: 600000 # 10 minutes in milliseconds
+
+  StandbyTimePeriod:
+    Description: The number of seconds over which the standby time metric is sampled.
+    Type: Number
+    Default: 60
+
+  StandbyTimeEvaluationPeriods:
+    Description: The number of periods over which the data is compared to the threshold.
+    Type: Number
+    Default: 5
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    AllowedPattern: "[-a-z0-9]*"
+
+Resources:
+  JobQueue:
+    Type: AWS::MediaConvert::Queue
+    Properties:
+      Description: !Sub "MediaConvert queue for ${QueueName}"
+      Name: !Sub "${EnvironmentName}-${QueueName}"
+      PricingPlan: ON_DEMAND
+      Status: ACTIVE
+
+  JobQueueErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${QueueName}-errors
+      AlarmDescription: !Sub "critical: mediaconvert: ${EnvironmentName}-${JobQueue} high error count."
+      Namespace: AWS/MediaConvert
+      MetricName: JobsErroredCount
+      Statistic: Sum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref ErrorAlarmThreshold
+      Period: !Ref ErrorAlarmPeriod
+      EvaluationPeriods: !Ref ErrorAlarmEvaluationPeriods
+      Dimensions:
+        - Name: Queue
+          Value: !Ref JobQueue
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+  JobQueueStandbyTimeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${QueueName}-standby-time
+      AlarmDescription: !Sub "warn: mediaconvert: ${EnvironmentName}-${JobQueue} standby time is high."
+      Namespace: AWS/MediaConvert
+      MetricName: StandbyTime
+      Statistic: Maximum
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref StandbyTimeThreshold
+      Period: !Ref StandbyTimePeriod
+      EvaluationPeriods: !Ref StandbyTimeEvaluationPeriods
+      Dimensions:
+        - Name: Queue
+          Value: !Ref JobQueue
+      OKActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+      AlarmActions:
+        - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+
+Outputs:
+  QueueName:
+    Description: The name of the mediaconvert job queue.
+    Value: !Ref JobQueue
+
+  QueueArn:
+    Description: The ARN of the mediaconvert job queue.
+    Value: !GetAtt JobQueue.Arn

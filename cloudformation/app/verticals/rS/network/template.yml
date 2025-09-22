@@ -1,0 +1,69 @@
+Description: Configures existing rS environment resources
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [qa, prod]
+
+  CloudFormationBaseUrl:
+    Type: String
+    Default: https://s3.amazonaws.com/cloudformation.adela.it/templates
+    AllowedValues:
+      - "https://s3.amazonaws.com/cloudformation.adela.it/templates"
+
+  GitRef:
+    Type: String
+    Default: '{{SHARED_TEMPLATE_GITSHA}}'
+    AllowedPattern: "^(master|[a-f0-9]{40})$"
+
+Mappings:
+  qa:
+    ap-southeast-1:
+      VpcId: vpc-3752c54e
+      DefaultSecurityGroup: sg-0ef29b7f
+      PrivateSubnets:
+        - subnet-063c393a
+        - subnet-7226663a
+        - subnet-b221a0e8
+        - subnet-f955dcd5
+      PublicSubnets:
+        - subnet-05c6c339
+        - subnet-2620606e
+        - subnet-2a23a270
+        - subnet-9957deb5
+
+  prod:
+    ap-southeast-1:
+      VpcId: vpc-c3b384a7
+      DefaultSecurityGroup: sg-3d338b45
+      PrivateSubnets:
+        - subnet-c0ceb5fd
+        - subnet-eaa0cf9c
+        - subnet-6446c13c
+        - subnet-f160dcdb
+      PublicSubnets:
+        - subnet-09ceb534
+        - subnet-11a1ce67
+        - subnet-5347c00b
+        - subnet-9267dbb8
+
+Resources:
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/${GitRef}/shared/vpc/existing.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        PublicSubnets: !Join
+          - ","
+          - !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", PublicSubnets]
+        PrivateSubnets: !Join
+          - ","
+          - !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", PrivateSubnets]
+        VpcId: !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", VpcId]
+        DefaultSecurityGroup: !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", DefaultSecurityGroup]
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName

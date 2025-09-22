@@ -1,0 +1,92 @@
+Description: Creates an alarm to alert on high CPU rate for existing legacy redis clusters
+
+Parameters:
+
+  RedisCluster:
+    Description: The name of the redis cluster.
+    Type: String
+
+  AlertTopicArn:
+    Description: The ARN of the SNS topic to send alerts to.
+    Type: String
+    Default: arn:aws:sns:ap-southeast-1:441221892871:ec2_healthcheck
+
+  NodeType:
+    Description: The compute and memory capacity of the nodes in the cluster.
+    Type: String
+
+  CPUHighPeriod:
+    Description: The number of seconds over which the RDS instance's CPU is sampled.
+    Type: Number
+    Default: 300
+
+  CPUHighEvaluationPeriods:
+    Description: The number of periods over which data is compared to the specified high CPU threshold.
+    Type: Number
+    Default: 1
+
+
+Mappings:
+
+# Map from https://github.com/rewardStyle/ltk-cloudformation/blob/00ca0550df6f701be35de41dfcf95a1b541f9445/templates/shared/cache/redis.yml
+
+  RedisNodeTypeCPUThresholds:
+    cache.r3.large:
+      CPUHighThreshold: 45
+    cache.r3.xlarge:
+      CPUHighThreshold: 22.5
+    cache.r3.2xlarge:
+      CPUHighThreshold: 11.25
+    cache.r3.4xlarge:
+      CPUHighThreshold: 5.625
+    cache.r3.8xlarge:
+      CPUHighThreshold: 2.8125
+    cache.t2.micro:
+      CPUHighThreshold: 90
+    cache.t2.small:
+      CPUHighThreshold: 90
+    cache.t2.medium:
+      CPUHighThreshold: 45
+    cache.m3.medium:
+      CPUHighThreshold: 90
+    cache.m3.large:
+      CPUHighThreshold: 45
+    cache.m3.xlarge:
+      CPUHighThreshold: 22.5
+    cache.m3.2xlarge:
+      CPUHighThreshold: 11.25
+    cache.m4.large:
+      CPUHighThreshold: 45
+    cache.m4.xlarge:
+      CPUHighThreshold: 22.5
+    cache.m4.2xlarge:
+      CPUHighThreshold: 11.25
+    cache.m4.4xlarge:
+      CPUHighThreshold: 5.625
+    cache.m4.10xlarge:
+      CPUHighThreshold: 2.25
+
+
+Resources:
+
+  CPUHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub legacy-redis-${RedisCluster}-CpuTooHigh
+      AlarmDescription: !Sub Notify when the legacy ${RedisCluster} redis cluster CPU is too high.
+      Namespace: AWS/ElastiCache
+      MetricName: CPUUtilization
+      Unit: Percent
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !FindInMap [RedisNodeTypeCPUThresholds, !Ref NodeType, CPUHighThreshold]
+      Period: !Ref CPUHighPeriod
+      EvaluationPeriods: !Ref CPUHighEvaluationPeriods
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref AlertTopicArn
+      OKActions:
+        - !Ref AlertTopicArn
+      Dimensions:
+        - Name: CacheClusterId
+          Value: !Ref RedisCluster

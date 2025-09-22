@@ -1,0 +1,226 @@
+Description: >
+  Creates the KMS keys for use by a vertical. A custom CF resource is used to
+  fetch users under certain path prefixes.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+  AdminPathComponent:
+    Description: >
+      This path component in a path prefix used for admin users
+    Type: String
+    Default: admins
+
+  DeveloperPathComponent:
+    Description: >
+      This path component in a path prefix used for developer users
+    Type: String
+    Default: developers
+
+  QAPathComponent:
+    Description: >
+      This path component in a path prefix used for QA users
+    Type: String
+    Default: qa
+
+Conditions:
+  IsQA: !Equals [!Ref EnvironmentName, "qa"]
+  QAHasKeyAccess: !Or
+    - Condition: IsQA
+    - !Equals [!Ref EnvironmentName, "dev"]
+
+Resources:
+
+  Key:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: >
+        For use by vertical apps to decrypt credentials stored in SSM parameter
+        store.
+      Enabled: true
+      KeyPolicy:
+        Statement:
+          - Sid: Allow IAM user permissions.
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+            # condition check: user path prefix
+          - Sid: Allow administration of the key.
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ","
+                - !GetAtt UsersByPrefix.Admins
+            Action:
+              - kms:Create*
+              - kms:Describe*
+              - kms:Enable*
+              - kms:List*
+              - kms:Put*
+              - kms:Update*
+              - kms:Revoke*
+              - kms:Disable*
+              - kms:Get*
+              - kms:Delete*
+              - kms:ScheduleKeyDeletion
+              - kms:CancelKeyDeletion
+            Resource: "*"
+          - Sid: Allow use of the key.
+            Effect: Allow
+            Principal:
+              AWS: !Split
+                - ","
+                - !Join
+                  - ","
+                  - - !GetAtt UsersByPrefix.Developers
+                    - !If
+                      - QAHasKeyAccess
+                      - !GetAtt UsersByPrefix.QA
+                      - !Ref AWS::NoValue
+            Action:
+              - kms:Encrypt
+              - kms:Decrypt
+            Resource: "*"
+
+  Alias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/${EnvironmentName}/${VerticalName}
+      TargetKeyId: !Ref Key
+
+  # Adding this key's ID to parameter store under the ltk-ops path since
+  # ltk-ops is the only thing that needs to access the ID for the purpose of
+  # encrypting any credentials it generates. All other resources that need
+  # access to this key for decryption are controlled by allowing the
+  # kms:Decrypt action on their policy.
+
+  Parameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/ltk-ops/kms-key-ids/${VerticalName}/shared
+      Value: !Ref Key
+
+  # Creates a parameter entry for vertical specific kms-key-ids. This is really
+  # for the main account where multiple verticals share prod and qa environments.
+  # Furthermore, there is no QA version of ltk-ops. prod ltk-ops deploys
+  # both prod and qa environments. This means that QA KMS key IDs for verticals
+  # will exist under the /prod/ltk-ops namespace.
+  EnvironmentParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub
+        - /${TargetEnvironment}/ltk-ops/kms-key-ids/${VerticalName}/${EnvironmentName}
+        - TargetEnvironment: !If
+            - IsQA
+            - prod
+            - !Ref EnvironmentName
+      Value: !Ref Key
+
+  UsersByPrefix:
+    Type: Custom::UsersByPrefix
+    DependsOn:
+      - LambdaFunction
+    Properties:
+      ServiceToken: !GetAtt LambdaFunction.Arn
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - LambdaFunctionRole
+    Properties:
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      MemorySize: 128
+      Timeout: 300
+      Code:
+        ZipFile: !Sub
+          - |
+              # v0.0.2
+              import boto3
+              import uuid
+              import cfnresponse
+
+              def get_physical_resource_id(event):
+                  physical_resource_id = event.get('physical_resource_id')
+                  if physical_resource_id:
+                      return physical_resource_id
+
+                  import uuid
+                  return "{}-{}-{}".format(
+                      "${AWS::StackName}",
+                      event.get("LogicalResourceId"),
+                      str(uuid.uuid4()).split("-")[0],
+                  )
+
+              def get_users_by_group(client, group_name):
+                  result = client.get_group(GroupName=group_name)
+                  try:
+                      return ",".join([x["Arn"] for x in result["Users"]])
+                  except KeyError:
+                    return "arn:aws:iam::${AWS::AccountId}:user/DummyUser"
+
+              def lambda_handler(event, context):
+                  print(event)
+                  client = boto3.client('iam')
+                  physical_resource_id = get_physical_resource_id(event)
+
+                  data = {}
+                  try:
+                      data["Admins"] = get_users_by_group(client, "${Admin}")
+                      data["Developers"] = get_users_by_group(client, "${Developer}")
+                      data["QA"] = get_users_by_group(client, "${QA}")
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, data, physical_resource_id)
+                  except Exception as err:
+                      data["Error"] = err.__str__()
+                      cfnresponse.send(event, context, cfnresponse.FAILED, data, physical_resource_id)
+                      raise
+
+                  print(data)
+          - QA: !Sub ${VerticalName}-${QAPathComponent}
+            Developer: !Sub ${VerticalName}-${DeveloperPathComponent}
+            Admin: !Sub ${VerticalName}-${AdminPathComponent}
+
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowUserList
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - iam:ListUsers
+                Resource:
+                  - !Sub arn:aws:iam::441221892871:user/collabs/*
+
+Outputs:
+
+  KeyArn:
+    Description: The ARN of the KMS key shared by vertical apps.
+    Value: !GetAtt Key.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn

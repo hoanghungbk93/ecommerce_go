@@ -1,0 +1,434 @@
+Description: Creates IAM groups, policies, and users for the LTK team.
+
+Parameters:
+
+  InitialPassword:
+    Description: The initial password for the users (MUST BE CHANGED!!!).
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  ####################
+  ##### Policies #####
+  ####################
+
+  SelfManagedIAMUserPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: ltk-self-managed-iam-access
+      Description: Allows IAM users to manage themselves and their MFA devices.
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - iam:ChangePassword
+              - iam:GetAccountSummary
+              - iam:GetLoginProfile
+              - iam:CreateAccessKey
+              - iam:UpdateAccessKey
+              - iam:DeleteAccessKey
+              - iam:ListAccessKeys
+              - iam:*SSHPublicKey
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+          - Effect: Allow
+            Action:
+              - iam:CreateVirtualMFADevice
+              - iam:EnableMFADevice
+              - iam:ResyncMFADevice
+              - iam:DeleteVirtualMFADevice
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+          - Effect: Allow
+            Action:
+              - iam:DeactivateMFADevice
+            Resource:
+              - !Sub arn:aws:iam::${AWS::AccountId}:mfa/${!aws:username}
+              - !Sub arn:aws:iam::${AWS::AccountId}:user/${!aws:username}
+            Condition:
+              Bool:
+                aws:MultiFactorAuthPresent: true
+          - Effect: Allow
+            Action:
+              - iam:ListVirtualMFADevices
+              - iam:ListMFADevices
+              - iam:ListUsers
+            Resource: "*"
+
+  SwitchRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: switch-role-policy
+      Description: Allows IAM users to switch into roles in other AWS accounts
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Resource:
+              - 'arn:aws:iam::022925635359:role/OpsDeveloper'
+              - 'arn:aws:iam::232188586941:role/OpsDeveloper' # LTK
+              - 'arn:aws:iam::282492028148:role/OpsDeveloper'
+              - 'arn:aws:iam::406233834736:role/OpsDeveloper'
+              - 'arn:aws:iam::676403976676:role/OpsDeveloper' # collabs
+
+  ####################
+  ###### Groups ######
+  ####################
+
+  DevGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: ltk-developers
+      ManagedPolicyArns:
+        - !Ref SelfManagedIAMUserPolicy
+        - !Ref SwitchRolePolicy
+      Policies:
+        - PolicyName: sqs-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: sqs:*
+                Resource:
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:dev-ltk*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:prod-ltk*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:qa-ltk*
+                  - !Sub arn:aws:sqs:*:${AWS::AccountId}:staging-ltk*
+        - PolicyName: ssm-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                  - ssm:DescribeParameters
+                  - ssm:GetParameterHistory
+                Resource: "*"
+        - PolicyName: data-pipeline-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: datapipeline:*
+                Resource: "*"
+        - PolicyName: ltk-tagged-resource-access
+          PolicyDocument:
+            Statement:
+              - Action: "*"
+                Effect: Allow
+                Resource: "*"
+                Condition:
+                  "ForAllValues:StringLike":
+                    "*:ResourceTag/Vertical":
+                      - LTK
+                      - ltk
+        - PolicyName: ltk-cloudformation-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/dev-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/prod-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/qa-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/staging-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/stage-ltk-*
+        - PolicyName: cloudformation-resource-management
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                Resource:
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:qa-ltk-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:prod-ltk-*
+                  - !Sub arn:aws:lambda:*:${AWS::AccountId}:function:stage-ltk-*
+              - Effect: Allow
+                Action:
+                  - events:*
+                Resource:
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/qa-ltk-*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/prod-ltk-*
+                  - !Sub arn:aws:events:*:${AWS::AccountId}:rule/stage-ltk-*
+              - Effect: Allow
+                Action:
+                  - iam:DeleteRole
+                  - iam:DeletePolicy
+                  - iam:DetachRolePolicy
+                  - iam:DeleteRolePolicy
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/dev-ltk-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/dev-ltk-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:policy/qa-ltk-*
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/qa-ltk-*
+        - PolicyName: full-ltk-ecs-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecs:*
+                Condition:
+                  StringLike:
+                    ecs:cluster:
+                      - !Sub arn:aws:ecs::${AWS::AccountId}:cluster/*-ltk-*
+                Resource:
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:task-definition/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:task/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:container-instance/*
+                  - !Sub arn:aws:ecs:*:${AWS::AccountId}:cluster/*
+        - PolicyName: ecr-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: ecr:*
+                Resource:
+                  - !Sub arn:aws:ecr:*:${AWS::AccountId}:repository/ltk-*
+                  - !Sub arn:aws:ecr:*:${AWS::AccountId}:repository/favorites-service
+        - PolicyName: xray-read-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - xray:Get*
+                  - xray:BatchGetTraces
+                Resource: '*'
+        - PolicyName: liketoknowit-s3-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - arn:aws:s3:::liketoknowit*
+                  - arn:aws:s3:::*.liketoknow.it
+                  - arn:aws:s3:::ltk*
+
+
+  QaGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: ltk-qa
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AmazonSQSReadOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess
+        - !Ref SelfManagedIAMUserPolicy
+
+  AdminGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: ltk-admins
+      Policies:
+        - PolicyName: ltk-cloudformation-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/dev-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/prod-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/qa-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/staging-ltk-*
+                  - !Sub arn:aws:cloudformation:*:${AWS::AccountId}:stack/stage-ltk-*
+        - PolicyName: ltk-iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: iam:*
+                Resource:
+                  - !Sub arn:aws:iam::${AWS::AccountId}:user/ltk-*
+              - Effect: Allow
+                Action:
+                  - iam:GenerateServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetails
+                  - iam:GetServiceLastAccessedDetailsWithEntities
+                  - iam:ListPoliciesGrantingServiceAccess
+                Resource: "*"
+        - PolicyName: liketoknowit-route53-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: route53:*
+                Resource:
+                  - arn:aws:route53:::hostedzone/Z2KZRZZXDRQBC9 # ltklocal
+                  - arn:aws:route53:::hostedzone/Z18JB9PTB86OL2 # l.tk
+                  - arn:aws:route53:::hostedzone/Z11DLPXGRCVQOL # liketoknow.it
+                  - arn:aws:route53:::hostedzone/ZUFQ1ZBSOL7O0  # liketk.it
+
+  BillManagerGroup:
+    Type: AWS::IAM::Group
+    Properties:
+      GroupName: ltk-bill-managers
+      Policies:
+        - PolicyName: AllowBilling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aws-portal:ViewUsage
+                  - aws-portal:ViewBilling
+                  - aws-portal:DescribeReportDefinition
+                  - aws-portal:PutReportDefinition
+                  - aws-portal:DeleteReportDefinition
+                  - aws-portal:ViewBudget
+                Resource: "*"
+
+  ###################
+  ###### Users ######
+  ###################
+
+  NathanPhetteplace:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: nathan.phetteplace
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+        - !Ref AdminGroup
+        - !Ref BillManagerGroup
+
+  JasonPearlman:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: jason.pearlman
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+        - !Ref AdminGroup
+        - !Ref BillManagerGroup
+
+  AdamBullmer:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: adam.bullmer
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+        - !Ref AdminGroup
+
+  TreyChadwell:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: trey.chadwell
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+        - !Ref AdminGroup
+
+  BrandonBlair:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: brandon.blair
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  LeeSander:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: lee.sander
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  DrewCummins:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: drew.cummins
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  RogerJohnson:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: roger.johnson
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - !Ref DevGroup
+
+  EJMablekos:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ej.mablekos
+      LoginProfile:
+        Password: !Ref InitialPassword
+        PasswordResetRequired: true
+      Groups:
+        - Developers
+        - !Ref DevGroup
+
+  ##################
+  ###### Bots ######
+  ##################
+
+  Ops:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: ltk-ops
+      Policies:
+        - PolicyName: allow-full-access
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action: "*"
+                Resource: "*"
+        - PolicyName: deny-billing-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - aws-portal:*
+                  - budgets:*
+                Resource: "*"
+        - PolicyName: deny-iam-access
+          PolicyDocument:
+            Statement:
+              - Effect: Deny
+                Action:
+                  - iam:*User
+                  - iam:*UserPolicy
+                  - iam:*Group
+                  - iam:*GroupPolicy
+                  - iam:AddUserToGroup
+                  - iam:RemoveUserFromGroup
+                  - iam:*LoginProfile
+                  - iam:ChangePassword
+                  - iam:*AccountPasswordPolicy
+                  - iam:*MFADevice
+                  - iam:*AccessKey
+                  - iam:*OpenIDConnectProvider
+                  - iam:UpdateOpenIDConnectProviderThumbprint
+                  - iam:UpdateServiceSpecificCredential
+                  - iam:*AccountAlias
+                  - iam:*SAMLProvider
+                  - iam:*SSHPublicKey
+                  - iam:*Certificate
+                  - iam:*CredentialReport
+                  - iam:Upload*
+                Resource: "*"

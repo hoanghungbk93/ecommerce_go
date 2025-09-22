@@ -1,0 +1,74 @@
+[
+  {
+    "ParameterKey": "EnvironmentName",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "ImageUrl", 
+    "ParameterValue": "142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app"
+  },
+  {
+    "ParameterKey": "GitSha",
+    "ParameterValue": "latest"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.small"
+  },
+  {
+    "ParameterKey": "ClusterMinSize",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "ClusterMaxSize",
+    "ParameterValue": "4"
+  },
+  {
+    "ParameterKey": "ClusterDesiredCapacity",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "BackendCPU",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "BackendMemoryReservation",
+    "ParameterValue": "512"
+  },
+  {
+    "ParameterKey": "FrontendCPU",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "FrontendMemoryReservation",
+    "ParameterValue": "256"
+  },
+  {
+    "ParameterKey": "BackendDesiredCount",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "FrontendDesiredCount",
+    "ParameterValue": "2"
+  },
+  {
+    "ParameterKey": "BackendMinCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "BackendMaxCapacity",
+    "ParameterValue": "6"
+  },
+  {
+    "ParameterKey": "FrontendMinCapacity",
+    "ParameterValue": "1"
+  },
+  {
+    "ParameterKey": "FrontendMaxCapacity",
+    "ParameterValue": "4"
+  },
+  {
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": "ecommerce-prod-key"
+  }
+]

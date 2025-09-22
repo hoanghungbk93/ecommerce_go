@@ -1,0 +1,102 @@
+---
+Description: Create Kubernetes control plane
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  KubernetesVersion:
+    Type: String
+    Default: '1.10'
+
+  ClusterName:
+    Type: String
+
+  SubnetIdOverrides:
+    Type: CommaDelimitedList
+    Description: |-
+      Specify a list of subnets instead of using all of them. This should only
+      be set to get around the known `InsufficientCapacity` issue when
+      provisioning clusters.
+    Default: ''
+
+Conditions:
+  HasSubnetIdOverrides: !Not [!Equals [!Join [',', !Ref SubnetIdOverrides], '']]
+
+Resources:
+
+  AWSServiceRoleForAmazonEKS:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - eks.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+
+
+  ControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Cluster communication with worker nodes
+      VpcId: !ImportValue
+        Fn::Sub: ${EnvironmentName}:stacksets:v2:env:vpc:id
+
+  Cluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      # Description: !Split [!Ref 'AWS::NoValue', 'abc']
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt AWSServiceRoleForAmazonEKS.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref ControlPlaneSecurityGroup
+        SubnetIds: !If
+          - HasSubnetIdOverrides
+          - !Ref SubnetIdOverrides
+          - !Split
+            - ","
+            - !Join
+              - ","
+              - - 'Fn::ImportValue': !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+                - 'Fn::ImportValue': !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets
+
+  EKSClusterArnSSM:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub /${EnvironmentName}/eks/clusters/${ClusterName}/arn
+      Value: !GetAtt Cluster.Arn
+
+Outputs:
+  ClusterArn:
+    Description: >
+      The ARN of the cluster, such as arn:aws:eks:us-west-2:666666666666:cluster/prod
+    Value: !GetAtt Cluster.Arn
+
+  ClusterName:
+    Description: The name of the cluster
+    Value: !Ref Cluster
+
+  CertificateAuthorityData:
+    Description: >
+      The certificate-authority-data for your cluster.
+    Value: !GetAtt Cluster.CertificateAuthorityData
+
+  Endpoint:
+    Description: >
+      The endpoint for your Kubernetes API server, such as
+      https://5E1D0CEXAMPLEA591B746AFC5AB30262.yl4.us-west-2.eks.amazonaws.com
+    Value: !GetAtt Cluster.Endpoint
+
+  ControlPlaneSecurityGroup:
+    Value: !Ref ControlPlaneSecurityGroup

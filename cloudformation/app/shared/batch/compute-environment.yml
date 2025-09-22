@@ -1,0 +1,168 @@
+Description: Creates a compute environment. Can be used with AWS Batch.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the service. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  ComputeEnvironmentName:
+    Description: The name of the compute environment.
+    Type: String
+
+  ComputeResourcesType:
+    Description: EC2 or SPOT.
+    Type: String
+    Default: EC2
+
+  MinvCpus:
+    Description: The minimum number of CPUs the compute environment should have.
+    Type: Number
+
+  MaxvCpus:
+    Description: The maximum number of CPUs the compute environment should have.
+    Type: Number
+
+  DesiredvCpus:
+    Description: The desired number of CPUs the compute environment should have.
+    Type: Number
+
+  InstanceTypes:
+    Description: The instances types that may launched.
+    Type: String
+
+  BidPercentage:
+    Description: Bid percentage for SPOT type resource. 90% means willing to go up to 90% of EC2 price.
+    Type: Number
+    Default: 90
+
+Conditions:
+
+  IsSpotEnvironment: !Equals [!Ref ComputeResourcesType, "SPOT"]
+
+Mappings:
+
+  # These are the latest ECS optimized AMIs as of November 2017:
+  #
+  #   amzn-ami-2017.09.a-amazon-ecs-optimized
+  #   ECS agent:    1.15.0
+  #   Docker:       17.06.2-ce
+  #   ecs-init:     1.15.0-4
+  #
+  # You can find the latest available on this page of our documentation:
+  # http://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs-optimized_AMI.html
+  # (note the AMI identifier is region specific)
+
+  RegionToAMI:
+    ap-southeast-1:
+      AMI: ami-20ff515a
+    us-east-2:
+      AMI: ami-b0527dd5
+    us-west-1:
+      AMI: ami-b388b4d3
+    us-west-2:
+      AMI: ami-3702ca4f
+    eu-west-1:
+      AMI: ami-d65dfbaf
+    eu-west-2:
+      AMI: ami-ee7d618a
+    eu-central-1:
+      AMI: ami-ebfb7e84
+    ap-northeast-1:
+      AMI: ami-95903df3
+    ap-southeast-1:
+      AMI: ami-c8c98bab
+    ap-southeast-2:
+      AMI: ami-e3b75981
+    ca-central-1:
+      AMI: ami-fc5fe798
+
+Resources:
+
+  BatchServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "batch.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole"
+
+  SpotFleetRole:
+    Type: "AWS::IAM::Role"
+    Condition: IsSpotEnvironment
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "batch.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetRole"
+
+  ECSContainerServiceRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "batch.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+
+  ComputeEnvironment:
+    Type: "AWS::Batch::ComputeEnvironment"
+    Properties:
+      ComputeEnvironmentName: !Sub ${EnvironmentName}-${ComputeEnvironmentName}
+      Type: "MANAGED"
+      State: "ENABLED"
+      ServiceRole: !Ref BatchServiceRole
+      ComputeResources:
+        Type: !Ref ComputeResourcesType
+        MinvCpus: !Ref MinvCpus
+        MaxvCpus: !Ref MaxvCpus
+        DesiredvCpus: !Ref DesiredvCpus
+        Subnets: !Split
+          - ","
+          - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+        Ec2KeyPair: !Sub ${VerticalName}-team
+        InstanceRole: !Ref ECSContainerServiceRole
+        BidPercentage: !If [IsSpotEnvironment, !Ref BidPercentage, !Ref "AWS::NoValue"]
+        SpotIamFleetRole: !If [IsSpotEnvironment, !Ref SpotFleetRole, !Ref "AWS::NoValue"]
+
+
+Outputs:
+
+  ComputeEnvironmentName:
+    Description: The name of the compute environment.
+    Value: !Ref ComputeEnvironment

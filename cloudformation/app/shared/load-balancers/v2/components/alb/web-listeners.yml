@@ -1,0 +1,92 @@
+---
+Parameters:
+  LoadBalancerArn:
+    Type: String
+
+  TargetGroupArn:
+    Type: String
+
+  ForceHTTPS:
+    Type: String
+    AllowedValues: [true, false]
+    Default: true
+    Description: >-
+      Redirect HTTP requests to HTTPS, if available.
+
+  EnableSSL:
+    Type: String
+    Default: true
+    AllowedValues: [true, false]
+
+  DomainName:
+    Type: String
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+
+Mappings:
+  CertArnByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+Conditions:
+  HasSSLEnabled: !Equals [!Ref EnableSSL, true]
+  HasForceHTTPS: !And
+    - !Condition HasSSLEnabled
+    - !Equals [!Ref ForceHTTPS, true]
+
+Resources:
+  ListenerHTTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - !If
+          - HasForceHTTPS
+          - Type: redirect
+            RedirectConfig:
+              Protocol: HTTPS
+              Port: '443'
+              StatusCode: HTTP_301
+          - Type: forward
+            TargetGroupArn: !Ref TargetGroupArn
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: 80
+      Protocol: HTTP
+
+  ListenerHTTPS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasSSLEnabled
+    Properties:
+      Port: 443
+      Protocol: HTTPS
+      LoadBalancerArn: !Ref LoadBalancerArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupArn
+      Certificates:
+        - CertificateArn: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+
+Outputs:
+  HTTPListener:
+    Description: The ARN of the public load balancer's Listener
+    Value: !Ref ListenerHTTP
+
+  HTTPSListener:
+    Condition: HasSSLEnabled
+    Description: The ARN of the public load balancer's Listener
+    Value: !Ref ListenerHTTPS
+
+  DefaultListener:
+    Description: The ARN of the default listener to be used for a load balancer
+    Value: !If
+      - HasSSLEnabled
+      - !Ref ListenerHTTPS
+      - !Ref ListenerHTTP
+
+# vim: set ft=yaml.cloudformation :

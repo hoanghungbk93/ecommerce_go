@@ -1,0 +1,85 @@
+Description: Exports values of pre-existing VPC resources.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+
+  Inventory:
+    dev:
+      VpcId: vpc-c658b0a1
+      DefaultSecurityGroup: sg-1faac966
+      PrivateSubnets:
+        - subnet-4f90b939
+        - subnet-37879053
+        - subnet-277b3b7f
+      PublicSubnets:
+        - subnet-4c90b93a
+        - subnet-2823db4f
+        - subnet-d87b3b80
+    qa:
+      VpcId: vpc-3752c54e
+      DefaultSecurityGroup: sg-0ef29b7f
+      PrivateSubnets:
+        - subnet-063c393a
+        - subnet-7226663a
+        - subnet-b221a0e8
+        - subnet-f955dcd5
+      PublicSubnets:
+        - subnet-05c6c339
+        - subnet-2620606e
+        - subnet-2a23a270
+        - subnet-9957deb5
+    prod:
+      VpcId: vpc-c3b384a7
+      DefaultSecurityGroup: sg-3d338b45
+      PrivateSubnets:
+        - subnet-c0ceb5fd
+        - subnet-eaa0cf9c
+        - subnet-6446c13c
+        - subnet-f160dcdb
+      PublicSubnets:
+        - subnet-09ceb534
+        - subnet-11a1ce67
+        - subnet-5347c00b
+        - subnet-9267dbb8
+
+Resources:
+
+  Dummy:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Type: String
+      Name: !Sub ${EnvironmentName}-tools-external-vpc-parameters-dummy
+      Description: Dummy resource for a CloudFormation stack that exports values of pre-existing VPC resources.
+      Value: Don't delete this!
+
+Outputs:
+
+  VpcId:
+    Description: Unique identifier of the VPC.
+    Value: !FindInMap [Inventory, !Ref EnvironmentName, VpcId]
+    Export:
+      Name: !Sub ${EnvironmentName}-tools-vpc-id
+
+  PublicSubnets:
+    Description: A list of the public subnets in the VPC.
+    Value: !Join [",", !FindInMap [Inventory, !Ref EnvironmentName, PublicSubnets]]
+    Export:
+      Name: !Sub ${EnvironmentName}-tools-vpc-public-subnets
+
+  PrivateSubnets:
+    Description: A list of the private subnets in the VPC.
+    Value: !Join [",", !FindInMap [Inventory, !Ref EnvironmentName, PrivateSubnets]]
+    Export:
+      Name: !Sub ${EnvironmentName}-tools-vpc-private-subnets
+
+  DefaultSecurityGroup:
+    Description: The default security group in the VPC.
+    Value: !FindInMap [Inventory, !Ref EnvironmentName, DefaultSecurityGroup]
+    Export:
+      Name: !Sub ${EnvironmentName}-tools-vpc-default-security-group

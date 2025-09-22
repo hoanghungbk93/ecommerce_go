@@ -1,0 +1,37 @@
+Description: Configures the KMS keys for the tools vertical
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+
+Conditions:
+  IsDev: !Equals [!Ref EnvironmentName, dev]
+
+Resources:
+  KMS:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsDev
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/kms/template.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        KeyAdministrators: !Join
+          - ","
+          - - !Sub arn:aws:iam::${AWS::AccountId}:user/jpcope
+        KeyUsers: !Join
+          - ","
+          - - !Sub arn:aws:iam::${AWS::AccountId}:user/jpcope
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Vertical
+          Value: !Ref VerticalName

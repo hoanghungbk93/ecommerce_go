@@ -1,0 +1,588 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  A highly configurable Lambda@Edge CDN that defaults to serving objects from a
+  single S3 bucket.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Type: String
+
+  Name:
+    Type: String
+    Description: >-
+      Name for this CDN. This will be used as the subdomain for the full domain
+      alias of this distribution. i.e. {Name}.{Domain}
+
+  BucketName:
+    Type: String
+    Description: >-
+      The name of the S3 bucket. This is only required if you don't plan on
+      overriding the "default" origin config via the AdditionalOriginsJSON
+      parameter.
+    AllowedPattern: "^(|[a-z][a-z0-9-.]+)$"
+    Default: ""
+
+  BucketPath:
+    Type: String
+    Description: >-
+      The optional path for the S3 origin
+    Default: ""
+
+  Domain:
+    Type: String
+    Description: >-
+      The top and second level domain, also known as the "hosted zone domain"
+      and will be used for the SSL certificate.
+
+  AdditionalAliases:
+    Type: CommaDelimitedList
+    Default: ""
+    Description: >-
+      List of domains to be used as aliases for this bucket CDN. Any aliases
+      added here will need to have their own route53 records created.
+
+  OriginAccessIdentity:
+    Type: String
+    Description: >-
+      Origin access identity that the CDN will use for access to a bucket. This
+      must be provided if you specify a bucket name.
+    AllowedPattern: "^(|[A-Z0-9]{13,})$"
+    Default: ""
+
+  OriginRequestLambdaFunctionARN:
+    Type: String
+    Default: ""
+    AllowedPattern: '^(|arn:aws:lambda:[^:]*:[0-9]{12}:function:[^:]+:\d+$)'
+    Description: |
+      The function that executes only when CloudFront forwards a request to your
+      origin. When the requested object is in the edge cache, the function
+      doesn't execute.
+
+      You must specify the ARN of a function version; you can't specify a Lambda
+      alias or $LATEST.
+
+  OriginResponseLambdaFunctionARN:
+    Type: String
+    Default: ""
+    AllowedPattern: '^(|arn:aws:lambda:[^:]*:[0-9]{12}:function:[^:]+:\d+$)'
+    Description: |
+      The function that executes after CloudFront receives a response from the
+      origin and before it caches the object in the response. Note that the
+      function executes even if an error is returned from the origin.
+
+      This function doesn't execute in the following cases:
+        - When the requested file is in the edge cache
+        - When the response is generated from a function that was triggered by
+          an origin request event
+
+      You must specify the ARN of a function version; you can't specify a Lambda
+      alias or $LATEST.
+
+  ViewerRequestLambdaFunctionARN:
+    Type: String
+    Default: ""
+    AllowedPattern: '^(|arn:aws:lambda:[^:]*:[0-9]{12}:function:[^:]+:\d+$)'
+    Description: >-
+      The function that executes when CloudFront receives a request from a
+      viewer, before it checks to see whether the requested object is in the
+      edge cache.
+
+      You must specify the ARN of a function version; you can't specify a Lambda
+      alias or $LATEST.
+
+  ViewerResponseLambdaFunctionARN:
+    Type: String
+    Default: ""
+    AllowedPattern: '^(|arn:aws:lambda:[^:]*:[0-9]{12}:function:[^:]+:\d+$)'
+    Description: |
+      The function that executes before returning the requested file to the
+      viewer. Note that the function executes regardless of whether the file is
+      already in the edge cache.
+      The function doesn't execute in the following cases:
+        - When the origin returns an HTTP status code of 400 or higher
+        - When a custom error page is returned
+        - When the response is generated from a function that was triggered by
+          a viewer request event
+        - When CloudFront automatically redirects an HTTP request to HTTPS
+          (when the value of Viewer Protocol Policy is Redirect HTTP to HTTPS)
+
+      You must specify the ARN of a function version; you can't specify a Lambda
+      alias or $LATEST.
+
+  CacheBehaviorsJSON:
+    Type: String
+    Default: ""
+    Description: >-
+      JSON configuration for defining cloudfront cache behaviors
+
+  AdditionalOriginsJSON:
+    Type: String
+    Default: ""
+
+  CustomErrorResponsesJSON:
+    Type: String
+    Default: ""
+
+  MinTTL:
+    Type: Number
+    Description: >-
+      Sets the MinTTL for the default cache policy
+    Default: 1
+
+  MaxTTL:
+    Type: Number
+    Description: >-
+      Sets the MaxTTL for the default cache policy
+    Default: 31536000
+
+  DefaultTTL:
+    Type: Number
+    Description: >-
+      Sets the DefaultTTL for the default cache policy
+    Default: 86400
+
+  CookieBehavior:
+    Type: String
+    Description: >-
+      Sets the CookieBehavior for the default cache policy
+    Default: none
+    AllowedValues:
+      - all
+      - whitelist
+      - none
+  Cookies:
+    Type: CommaDelimitedList
+    Default: ""
+
+  HeaderBehavior:
+    Type: String
+    Description: >-
+      Sets the CookieBehavior for the default cache policy
+    Default: whitelist
+    AllowedValues:
+      - all
+      - whitelist
+      - none
+  Headers:
+    Type: CommaDelimitedList
+    Default: "Origin,Access-Control-Request-Headers,Access-Control-Request-Method"
+
+  QueryStringBehavior:
+    Type: String
+    Description: >-
+      Sets the QueryStringBehavior for the default cache policy
+    Default: none
+    AllowedValues:
+      - all
+      - whitelist
+      - none
+  QueryStrings:
+    Type: CommaDelimitedList
+    Default: ""
+
+  4xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Client-error rate thresold in percentage
+    Default: 5
+    MinValue: -1
+
+  4xxEvaluationPeriods:
+    Type: Number
+    Default: 5
+
+  4xxAlarmUrgency:
+    Type: String
+    Default: low
+    AllowedValues: [critical, low]
+
+  5xxErrorRateThreshold:
+    Type: Number
+    Description: >-
+      Error rate thresold in percentage
+    Default: 1
+    MinValue: -1
+
+  5xxAlarmUrgency:
+    Type: String
+    Default: "critical"
+    AllowedValues: [critical, low]
+
+  LambdaExecutionErrorThreshold:
+    Type: Number
+    Default: 0
+    MinValue: -1
+
+  LambdaExecutionErrorUrgency:
+    Type: String
+    Default: "critical"
+    AllowedValues: [critical, low]
+
+  LambdaExecutionErrorEvaluationPeriods:
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  LambdaValidationErrorThreshold:
+    Type: Number
+    Default: 0
+    MinValue: -1
+
+  LambdaValidationErrorUrgency:
+    Type: String
+    Default: "critical"
+    AllowedValues: [critical, low]
+
+  LambdaValidationErrorEvaluationPeriods:
+    Type: Number
+    Default: 1
+    MinValue: 1
+
+  ViewerProtocolPolicy:
+    Type: String
+    Default: redirect-to-https
+    AllowedValues:
+      - redirect-to-https
+      - allow-all
+
+  OriginShieldEnabled:
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+
+  OriginShieldRegion:
+    Description: |
+      Choose the region that has the lowest lateny to your origin.
+      The following regions do not have origin shield, but you can use the
+      nearest as an alternative:
+      us-west-1 -> us-west-2
+      af-south-1 -> eu-west-1
+      ap-east-1 -> ap-southeast-1
+      ca-central-1 -> ap-southeast-1
+      eu-south-1 -> eu-central-1
+      eu-west-3 -> eu-west-2
+      eu-north-1 -> eu-west-2
+      me-south-1 -> ap-south-1
+    Type: String
+    Default: ap-southeast-1
+    AllowedValues:
+      - ap-northeast-1
+      - ap-northeast-2
+      - ap-south-1
+      - ap-southeast-1
+      - ap-southeast-2
+      - eu-central-1
+      - eu-west-1
+      - eu-west-2
+      - sa-east-1
+      - ap-southeast-1
+      - us-east-2
+      - us-west-2
+
+  LoggingEnabled:
+    Type: String
+    Description: >-
+      Enables access logging that can be queried in Athena. This is always
+      enabled in prod.
+    Default: false
+    AllowedValues: [true, false]
+
+  WebACLId:
+    Type: String
+    Description: >
+      By default the USA Embargo WebACL will be applied
+    Default: ""
+
+  # Khanh Customize
+  CertCDNDomain:
+    Type: String
+    Default: ""
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+
+  HasOriginRequestLambdaFunctionARN: !Not
+    - !Equals [!Ref OriginRequestLambdaFunctionARN, ""]
+  HasOriginResponseLambdaFunctionARN: !Not
+    - !Equals [!Ref OriginResponseLambdaFunctionARN, ""]
+  HasViewerRequestLambdaFunctionARN: !Not
+    - !Equals [!Ref ViewerRequestLambdaFunctionARN, ""]
+  HasViewerResponseLambdaFunctionARN: !Not
+    - !Equals [!Ref ViewerResponseLambdaFunctionARN, ""]
+  HasNoCoookies: !Equals [!Ref CookieBehavior, none]
+  HasCookies: !And
+    - !Not [!Condition HasNoCoookies]
+    - !Not [!Equals [!Join ["", !Ref Cookies], ""]]
+  HasNoHeaders: !Equals [!Ref HeaderBehavior, none]
+  HasHeaders: !And
+    - !Not [!Condition HasNoHeaders]
+    - !Not [!Equals [!Join ["", !Ref Headers], ""]]
+  ShouldForwardQueryStrings: !Not [!Equals [!Ref QueryStringBehavior, none]]
+  HasQueryStrings: !And
+    - !Equals [!Ref QueryStringBehavior, whitelist]
+    - !Not [!Equals [!Join ["", !Ref QueryStrings], ""]]
+
+  HasAdditionalAliases: !Not [!Equals [!Join [",", !Ref AdditionalAliases], ""]]
+
+  # HasLogging: !Or
+  #   - !Condition IsEnvProd
+  #   - !Equals [!Ref LoggingEnabled, true]
+
+  # Khanh customize
+  HasLogging: !Equals [!Ref LoggingEnabled, true]
+
+  Has4xxAlarm: !Not [!Equals [!Ref 4xxErrorRateThreshold, -1]]
+  Has5xxAlarm: !Not [!Equals [!Ref 5xxErrorRateThreshold, -1]]
+  HasLambdaValidationErrorAlarm: !Not [!Equals [!Ref LambdaValidationErrorThreshold, -1]]
+  HasLambdaExecutionErrorAlarm: !Not [!Equals [!Ref LambdaExecutionErrorThreshold, -1]]
+
+  HasWebACLId: !Not [!Equals [!Ref WebACLId, ""]]
+  EnableUsaEmbargoWebACL: !Not [!Condition HasWebACLId]
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+
+Mappings:
+  CertArnByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+Resources:
+  CloudFrontDistributionAliasRecordSet:
+    Type: AWS::Route53::RecordSet
+    # DependsOn: CloudFrontDistribution  # implied by !GetAtt below
+    Properties:
+      HostedZoneName: !Sub ${Domain}.
+      Name: !Sub ${EnvironmentName}-${Name}.${Domain}.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Metadata:
+      cfn-lint:
+        config:
+          ignore_checks:
+            - E3002
+    Properties:
+      DistributionConfig:
+        Comment: !Sub |
+          ${EnvironmentName}-${Name}
+          ${AWS::StackName}
+        Enabled: true
+        HttpVersion: http2
+        Aliases: !Split
+          - ","
+          - !Join
+            - ","
+            - - !Sub ${EnvironmentName}-${Name}.${Domain}
+              - !If
+                - HasAdditionalAliases
+                - !Join [",", !Ref AdditionalAliases]
+                - !Ref AWS::NoValue
+        PriceClass: !If
+          - IsEnvProd
+          - PriceClass_All
+          - PriceClass_100
+        CacheBehaviors:
+          Fn::Transform:
+            - Name: CloudFrontConfig
+              Parameters:
+                JSON: !Ref CacheBehaviorsJSON
+                Target: CacheBehaviors
+        DefaultCacheBehavior:
+          AllowedMethods: [GET, HEAD, OPTIONS]
+          CachedMethods: [GET, HEAD, OPTIONS]
+          Compress: true
+          MinTTL: !Ref MinTTL
+          MaxTTL: !Ref MaxTTL
+          DefaultTTL: !Ref DefaultTTL
+          ForwardedValues:
+            Cookies:
+              Forward: !Ref CookieBehavior
+              WhitelistedNames: !If
+                - HasCookies
+                - !Ref Cookies
+                - !Ref AWS::NoValue
+            Headers: !If
+              - HasHeaders
+              - !Ref Headers
+              - !If
+                - HasNoHeaders
+                - !Ref AWS::NoValue
+                - - Origin
+                  - Access-Control-Request-Headers
+                  - Access-Control-Request-Method
+            QueryString: !If [ShouldForwardQueryStrings, true, false]
+            QueryStringCacheKeys: !If [HasQueryStrings, !Ref QueryStrings, !Ref AWS::NoValue]
+          TargetOriginId: default
+          ViewerProtocolPolicy: !Ref ViewerProtocolPolicy
+          LambdaFunctionAssociations:
+            - !If
+              - HasOriginRequestLambdaFunctionARN
+              - EventType: origin-request
+                LambdaFunctionARN: !Ref OriginRequestLambdaFunctionARN
+              - !Ref AWS::NoValue
+            - !If
+              - HasOriginResponseLambdaFunctionARN
+              - EventType: origin-response
+                LambdaFunctionARN: !Ref OriginResponseLambdaFunctionARN
+              - !Ref AWS::NoValue
+            - !If
+              - HasViewerRequestLambdaFunctionARN
+              - EventType: viewer-request
+                LambdaFunctionARN: !Ref ViewerRequestLambdaFunctionARN
+              - !Ref AWS::NoValue
+            - !If
+              - HasViewerResponseLambdaFunctionARN
+              - EventType: viewer-response
+                LambdaFunctionARN: !Ref ViewerResponseLambdaFunctionARN
+              - !Ref AWS::NoValue
+        DefaultRootObject: ""
+        CustomErrorResponses:
+          Fn::Transform:
+            Name: CloudFrontConfig
+            Parameters:
+              Target: CustomErrorResponses
+              JSON: !Ref CustomErrorResponsesJSON
+        Origins:
+          Fn::Transform:
+            Name: CloudFrontConfig
+            Parameters:
+              Target: Origins
+              AdditionalJSON: !Ref AdditionalOriginsJSON
+              JSON: !Sub >-
+                [
+                  {
+                    "Id": "default",
+                    "DomainName": "${BucketName}.s3.amazonaws.com",
+                    "OriginPath": "${BucketPath}",
+                    "OriginShield": {
+                      "Enabled" : ${OriginShieldEnabled},
+                      "OriginShieldRegion" : "${OriginShieldRegion}"
+                    },
+                    "S3OriginConfig": {
+                      "OriginAccessIdentity": "origin-access-identity/cloudfront/${OriginAccessIdentity}"
+                    }
+                  }
+                ]
+        ViewerCertificate:
+          # AcmCertificateArn: !FindInMap [CertArnByDomain, !Ref Domain, Arn]
+          # Khanh customize
+          AcmCertificateArn: !FindInMap [CertArnByDomain, !Ref CertCDNDomain, Arn]
+          MinimumProtocolVersion: TLSv1.1_2016
+          # MinimumProtocolVersion: TLSv1
+          SslSupportMethod: sni-only
+        Logging: !If
+          - HasLogging
+          - Bucket: !GetAtt PartitionedLogging.Outputs.AccessLogsBucket
+            Prefix: !GetAtt PartitionedLogging.Outputs.DistributionLoggingPrefix
+          - !Ref AWS::NoValue
+        WebACLId: !If
+          - EnableUsaEmbargoWebACL
+          - !ImportValue WafV2CloudfrontWebAclUsaEmbargoArn
+          - !Ref 'AWS::NoValue'
+      Tags:
+        - Key: Domain
+          Value: !Ref Domain
+        - Key: Alias
+          Value: !Sub ${EnvironmentName}-${Name}.${Domain}
+        - Key: Name
+          Value: !Ref Name
+
+  PartitionedLogging:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasLogging
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/logging/partitioned.yml
+      Parameters:
+        Name: !Ref Name
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+
+  4xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: Has4xxAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 4xxErrorRate
+        EvaluationPeriods: !Ref 4xxEvaluationPeriods
+        Threshold: !Ref 4xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        Urgency: !Ref 4xxAlarmUrgency
+
+  5xxAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: Has5xxAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: 5xxErrorRate
+        Threshold: !Ref 5xxErrorRateThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        Urgency: !Ref 5xxAlarmUrgency
+
+  LambdaExecutionErrorAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasLambdaExecutionErrorAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: LambdaExecutionError
+        Threshold: !Ref LambdaExecutionErrorThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        Urgency: !Ref LambdaExecutionErrorUrgency
+        EvaluationPeriods: !Ref LambdaExecutionErrorEvaluationPeriods
+
+  LambdaValidationErrorAlarm:
+    Type: AWS::CloudFormation::Stack
+    Condition: HasLambdaValidationErrorAlarm
+    Properties:
+      TemplateURL: >-
+        https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/cloudfront/addons/alarms/error-rate.yml
+      Parameters:
+        MetricName: LambdaValidationError
+        Threshold: !Ref LambdaValidationErrorThreshold
+        EnvironmentName: !Ref EnvironmentName
+        DistributionId: !Ref CloudFrontDistribution
+        VerticalName: !Ref VerticalName
+        Urgency: !Ref LambdaValidationErrorUrgency
+        EvaluationPeriods: !Ref LambdaValidationErrorEvaluationPeriods
+
+Outputs:
+  DistributionDomainName:
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  DomainNameAlias:
+    Value: !Ref CloudFrontDistributionAliasRecordSet
+
+  CloudFrontDistributionId:
+    Description: The ID of the created cloudfront distribution
+    Value: !Ref CloudFrontDistribution
+    Export:
+      Name: !Sub ${EnvironmentName}:${VerticalName}:${Name}:distribution-id
+# vim: set ft=yaml.cloudformation :

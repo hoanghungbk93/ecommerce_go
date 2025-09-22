@@ -1,0 +1,52 @@
+Description: Exports values of pre-existing VPC resources.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev]
+
+  CloudFormationBaseUrl:
+    Type: String
+    Default: https://s3.amazonaws.com/cloudformation.adela.it/templates
+    AllowedValues:
+      - "https://s3.amazonaws.com/cloudformation.adela.it/templates"
+
+Mappings:
+
+  dev:
+    ap-southeast-1:
+      VpcId: vpc-4978f32e
+      DefaultSecurityGroup: sg-d22c11a9
+      PrivateSubnets:
+        - subnet-b81efaf1
+        - subnet-8991a5a3
+        - subnet-d59390e8
+        - subnet-4d665015
+      PublicSubnets:
+        - subnet-75aab203
+        - subnet-b7cbe1ef
+        - subnet-757f545f
+        - subnet-19fbfa24
+
+Conditions:
+  IsDev: !Equals [!Ref EnvironmentName, dev]
+
+Resources:
+
+  PublishedVPCConfig:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsDev
+    Properties:
+      TemplateURL: !Sub ${CloudFormationBaseUrl}/shared/vpc/existing.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        PublicSubnets: !Join
+          - ","
+          - !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", PublicSubnets]
+        PrivateSubnets: !Join
+          - ","
+          - !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", PrivateSubnets]
+        VpcId: !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", VpcId]
+        DefaultSecurityGroup: !FindInMap [!Ref EnvironmentName, !Ref "AWS::Region", DefaultSecurityGroup]

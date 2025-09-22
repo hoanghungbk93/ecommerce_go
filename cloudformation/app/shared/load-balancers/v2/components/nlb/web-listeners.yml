@@ -1,0 +1,66 @@
+---
+Parameters:
+  LoadBalancerArn:
+    Type: String
+
+  TargetGroupArn:
+    Type: String
+
+  CertificateDomainName:
+    Description: >-
+      The domain name for the TLS certificate.
+    Type: String
+    Default: ""
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+      - E7001
+
+Mappings:
+  CertArnByDomain:
+    'Fn::Transform':
+      Name: 'AWS::Include'
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/{{SHARED_TEMPLATE_GITSHA}}/shared/includes/mappings/cert-domain-arn-map.yml
+
+Conditions:
+  HasCertificate: !Not [!Equals [!Ref CertificateDomainName, ""]]
+
+Resources:
+  ListenerTCP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupArn
+      LoadBalancerArn: !Ref LoadBalancerArn
+      Port: 80
+      Protocol: TCP
+
+  ListenerTLS:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasCertificate
+    Properties:
+      Port: 443
+      Protocol: TLS
+      LoadBalancerArn: !Ref LoadBalancerArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupArn
+      Certificates:
+        - CertificateArn:
+            Fn::FindInMap: [CertArnByDomain, !Ref CertificateDomainName, Arn]
+
+Outputs:
+  TCPListener:
+    Description: The ARN of the public load balancer's Listener
+    Value: !Ref ListenerTCP
+
+  TLSListener:
+    Condition: HasCertificate
+    Description: The ARN of the public load balancer's Listener
+    Value: !Ref ListenerTLS
+# vim: set ft=yaml.cloudformation :

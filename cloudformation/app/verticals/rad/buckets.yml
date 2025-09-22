@@ -1,0 +1,56 @@
+Description: Creates S3 buckets needed for Revenue Analytics Data Vertical.
+
+Resources:
+
+  RsDataScienceFiles2018Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: rs-data-science-files-2018
+
+  RsDataScienceFiles2018BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn: RsDataScienceFiles2018Bucket
+    Properties:
+      Bucket: !Ref RsDataScienceFiles2018Bucket
+      PolicyDocument:
+        Statement:
+          - Sid: Allow access from influencer tools dev account.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::406233834736:root
+            Action:
+              - s3:*
+            Resource: !Sub ${RsDataScienceFiles2018Bucket.Arn}/*
+          - Sid: Allow access from StratDev dev account. # TODO rename to RAD dev account
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::232188586941:root
+            Action:
+              - s3:*
+            Resource: !Sub ${RsDataScienceFiles2018Bucket.Arn}/*
+          - Sid: Allow access from RevMgmt dev account. # TODO deprecate and remove
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::525609397584:root
+            Action:
+              - s3:*
+            Resource: !Sub ${RsDataScienceFiles2018Bucket.Arn}/*
+          - Sid: Allow access from LinkMgmt dev account. # TODO deprecate and remove
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::841316405184:root
+            Action:
+              - s3:*
+            Resource: !Sub ${RsDataScienceFiles2018Bucket.Arn}/*
+          - Sid: Allow access from ProdDisco dev account.
+            Effect: Allow
+            Principal:
+              AWS:
+                - arn:aws:iam::677160192792:root
+            Action:
+              - s3:*
+            Resource: !Sub ${RsDataScienceFiles2018Bucket.Arn}/*

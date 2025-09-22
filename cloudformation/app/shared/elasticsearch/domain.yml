@@ -1,0 +1,209 @@
+Description: Creates an Elasticsearch cluster
+
+Parameters:
+  DomainName:
+    Description: A name for the Amazon ES domain.
+    Type: String
+
+  EnvironmentName:
+    Description: name of the environment
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Type: String
+    AllowedPattern: "[a-z0-9-]+"
+    Description: >-
+      The name of the vertical that owns the cluster. The vertical name is
+      required to be lowercase as it is used in the naming convention of
+      resources created by this template and by resources on which this template
+      depends.
+
+  ElasticsearchVersion:
+    Type: String
+    Description: User defined Elasticsearch Version
+    Default: 6.0
+
+  InstanceCount:
+    Description: >
+      Number of data nodes. You can specify a maximum of three.
+    Type: Number
+    MinValue: 1
+    MaxValue: 3
+    Default: 2
+
+  InstanceType:
+    Type: String
+    AllowedValues: [t2.small.elasticsearch,t2.medium.elasticsearch,t3.small.elasticsearch,t3.medium.elasticsearch,c4.large.elasticsearch,c4.xlarge.elasticsearch,c4.2xlarge.elasticsearch,c4.4xlarge.elasticsearch,c4.8xlarge.elasticsearch,m3.medium.elasticsearch,m3.large.elasticsearch,m3.xlarge.elasticsearch,m3.2xlarge.elasticsearch,m4.large.elasticsearch,m4.xlarge.elasticsearch,m4.2xlarge.elasticsearch,m4.4xlarge.elasticsearch,m4.10xlarge.elasticsearch,r3.large.elasticsearch,r3.xlarge.elasticsearch,r3.2xlarge.elasticsearch,r3.4xlarge.elasticsearch,r3.8xlarge.elasticsearch,r4.large.elasticsearch,r4.xlarge.elasticsearch,r4.2xlarge.elasticsearch,r4.4xlarge.elasticsearch,r4.8xlarge.elasticsearch,r4.16xlarge.elasticsearch,i2.xlarge.elasticsearch,i2.2xlarge.elasticsearch,i3.large.elasticsearch,i3.xlarge.elasticsearch,i3.2xlarge.elasticsearch,i3.4xlarge.elasticsearch,i3.8xlarge.elasticsearch,i3.16xlarge.elasticsearch,m5.large.elasticsearch,m5.xlarge.elasticsearch,m5.2xlarge.elasticsearch,m5.4xlarge.elasticsearch,m5.12xlarge.elasticsearch]
+    Default: t2.small.elasticsearch
+
+  DedicatedMasterEnabled:
+    Description: Whether to enabled dedicated master nodes.
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: false
+
+  DedicatedMasterCount:
+    Description: Number of dedicated masters
+    Type: Number
+    Default: 3
+    MinValue: 3
+
+  DedicatedMasterType:
+    Type: String
+    AllowedValues: [t2.small.elasticsearch,t2.medium.elasticsearch,t3.small.elasticsearch,t3.medium.elasticsearch,c4.large.elasticsearch,c4.xlarge.elasticsearch,c4.2xlarge.elasticsearch,c4.4xlarge.elasticsearch,c4.8xlarge.elasticsearch,m3.medium.elasticsearch,m3.large.elasticsearch,m3.xlarge.elasticsearch,m3.2xlarge.elasticsearch,m4.large.elasticsearch,m4.xlarge.elasticsearch,m4.2xlarge.elasticsearch,m4.4xlarge.elasticsearch,m4.10xlarge.elasticsearch,r3.large.elasticsearch,r3.xlarge.elasticsearch,r3.2xlarge.elasticsearch,r3.4xlarge.elasticsearch,r3.8xlarge.elasticsearch,r4.large.elasticsearch,r4.xlarge.elasticsearch,r4.2xlarge.elasticsearch,r4.4xlarge.elasticsearch,r4.8xlarge.elasticsearch,r4.16xlarge.elasticsearch,i2.xlarge.elasticsearch,i2.2xlarge.elasticsearch,i3.large.elasticsearch,i3.xlarge.elasticsearch,i3.2xlarge.elasticsearch,i3.4xlarge.elasticsearch,i3.8xlarge.elasticsearch,i3.16xlarge.elasticsearch,m5.large.elasticsearch,m5.xlarge.elasticsearch,m5.2xlarge.elasticsearch,m5.4xlarge.elasticsearch,m5.12xlarge.elasticsearch]
+    Default: t2.small.elasticsearch
+
+  ZoneAwarenessEnabled:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+  EBSEnabled:
+    Type: String
+    Description: >-
+      Specifies whether Amazon EBS volumes are attached to data nodes in the
+      Amazon ES domain.
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+  Iops:
+    Type: Number
+    Description: >-
+      The number of I/O operations per second (IOPS) that the volume supports.
+      This property applies only to the Provisioned IOPS (SSD) EBS volume type.
+    Default: 0
+
+  VolumeSize:
+    Type: Number
+    Description: >-
+      The size of the EBS volume for each data node. The minimum and maximum
+      size of an EBS volume depends on the EBS volume type and the instance type
+      to which it is attached.
+    Default: 20
+
+  VolumeType:
+    Type: String
+    AllowedValues: [gp3, gp2, standard, io1]
+    Default: gp2
+    Description: >-
+      The EBS volume type to use with the Amazon ES domain, such as standard,
+      gp3, gp2, or io1.
+
+  AutomatedSnapshotStartHour:
+    Type: Number
+    Description: >-
+      The hour in UTC during which the service takes an automated daily snapshot
+      of the indices in the Amazon ES domain.
+    Default: 0
+    MinValue: 0
+    MaxValue: 23
+
+  DisableIAMRequestSigning:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+
+Conditions:
+  IsDedicatedMasterEnabled: !Equals [!Ref DedicatedMasterEnabled, true]
+  IsIAMRequestSigningDisabled: !Equals [!Ref DisableIAMRequestSigning, true]
+  HasTwoOrMoreInstances: !Or
+    - !Equals [!Ref InstanceCount, 2]
+    - !Equals [!Ref InstanceCount, 3]
+  HasThreeInstances: !Equals [!Ref InstanceCount, 3]
+
+Resources:
+
+  ElasticsearchCluster:
+    Type: "AWS::Elasticsearch::Domain"
+    Properties:
+      AccessPolicies: !If
+        - IsIAMRequestSigningDisabled
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal:
+                AWS: "*"
+              Action: "es:*"
+              Resource: !Sub arn:aws:es:${AWS::Region}:${AWS::AccountId}:domain/${EnvironmentName}-${VerticalName}-${DomainName}/*
+        - !Ref AWS::NoValue
+
+      DomainName: !Sub ${EnvironmentName}-${VerticalName}-${DomainName}
+      ElasticsearchVersion: !Ref ElasticsearchVersion
+      ElasticsearchClusterConfig:
+        InstanceCount: !Ref InstanceCount
+        InstanceType: !Ref InstanceType
+        ZoneAwarenessEnabled: !If [HasTwoOrMoreInstances, !Ref ZoneAwarenessEnabled, false]
+        DedicatedMasterEnabled: !Ref DedicatedMasterEnabled
+        DedicatedMasterType: !If
+          - IsDedicatedMasterEnabled
+          - !Ref DedicatedMasterType
+          - !Ref "AWS::NoValue"
+        DedicatedMasterCount: !If
+          - IsDedicatedMasterEnabled
+          - !Ref DedicatedMasterCount
+          - !Ref "AWS::NoValue"
+
+      EBSOptions:
+        EBSEnabled: !Ref EBSEnabled
+        Iops: !Ref Iops
+        VolumeSize: !Ref VolumeSize
+        VolumeType: !Ref VolumeType
+
+      SnapshotOptions:
+        AutomatedSnapshotStartHour: !Ref AutomatedSnapshotStartHour
+
+      AdvancedOptions:
+        rest.action.multi.allow_explicit_index: "true"
+        indices.fielddata.cache.size: 40
+        indices.query.bool.max_clause_count: 1024
+
+      VPCOptions:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:default-security-group
+        # NOTE:
+        #   If zone awareness enabled, you need to provide TWO subnet IDs from
+        #   different availability zones.
+        SubnetIds:
+          - Fn::Select:
+              - 1
+              - !Split
+                  - ","
+                  - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+          - Fn::If:
+              - HasTwoOrMoreInstances
+              - Fn::Select:
+                  - 2
+                  - !Split
+                      - ","
+                      - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+              - !Ref "AWS::NoValue"
+          - Fn::If:
+              - HasThreeInstances
+              - Fn::Select:
+                  - 3
+                  - !Split
+                      - ","
+                      - Fn::ImportValue: !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets
+              - !Ref "AWS::NoValue"
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${VerticalName}-${DomainName}
+        - Key: Vertical
+          Value: !Ref VerticalName
+    UpdatePolicy:
+      EnableVersionUpgrade: true
+
+  HostParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub /${EnvironmentName}/elasticsearch/${DomainName}/host
+      Description: !Sub Automated by CloudFormation (${AWS::StackName})
+      Type: String
+      Value: !GetAtt ElasticsearchCluster.DomainEndpoint
+
+Outputs:
+  DomainArn:
+    Value: !GetAtt ElasticsearchCluster.DomainArn
+  DomainEndpoint:
+    Value: !GetAtt ElasticsearchCluster.DomainEndpoint

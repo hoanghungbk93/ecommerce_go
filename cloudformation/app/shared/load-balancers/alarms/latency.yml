@@ -1,0 +1,125 @@
+Description: Creates a latency monitor for ELBs
+
+Parameters:
+  LoadBalancerFullName:
+    Type: String
+    Description: >
+      The full name of the load balancer.
+    AllowedPattern: '^(app\/)?[a-z0-9-]+(\/[a-f0-9]{16})?$'
+
+  LoadBalancerType:
+    Type: String
+    Default: ALB
+    AllowedValues: [ALB, CLB]
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the ELB. This should be lower cased as
+      the vertical name is used in the naming convention of various resources.
+    AllowedPattern: "[a-z0-9-]+"
+    Type: String
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  LatencyThreshold:
+    Description: >
+      The threshold for the latency in seconds at which we should trigger an
+      alarm.
+    Type: Number
+    MinValue: 0.001
+
+  Percentile:
+    Description: >
+      The latency percentile metric to monitor. Defaults to the 99th percentile.
+    Type: Number
+    MinValue: 0.1
+    MaxValue: 100
+    Default: 99
+
+  Period:
+    Description: >
+      The time over which the specified statistic is applied. Specify time in
+      seconds, in multiples of 60
+    Type: Number
+    MinValue: 60
+    Default: 300
+
+  EvaluationPeriods:
+    Description: >
+      The number of periods over which data is compared to the specified
+      threshold.
+    Type: Number
+    MinValue: 1
+    Default: 1
+
+  EvaluateLowSampleCountPercentile:
+    Type: String
+    Description: >
+      Specifies whether to evaluate the data and potentially change the alarm
+      state if there are too few data points to be statistically significant.
+    AllowedValues: [ignore, evaluate]
+    Default: evaluate
+
+Mappings:
+  ELBMetricInfoByType:
+    CLB:
+      Namespace: AWS/ELB
+      MetricName: Latency
+    ALB:
+      Namespace: AWS/ApplicationELB
+      MetricName: TargetResponseTime
+
+Conditions:
+  EnvIsProd: !Equals [!Ref EnvironmentName, prod]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  LatencyTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !Sub >
+        critical: elb: ${LoadBalancerFullName} latency > ${LatencyThreshold} seconds.
+      Namespace:
+        !FindInMap [ELBMetricInfoByType, !Ref LoadBalancerType, Namespace]
+      MetricName:
+        !FindInMap [ELBMetricInfoByType, !Ref LoadBalancerType, MetricName]
+      ExtendedStatistic: !Sub p${Percentile}
+      ComparisonOperator: GreaterThanThreshold
+      Threshold: !Ref LatencyThreshold
+      Period: !Ref Period
+      EvaluationPeriods: !Ref EvaluationPeriods
+      EvaluateLowSampleCountPercentile: !Ref EvaluateLowSampleCountPercentile
+      ActionsEnabled: true
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [EnvIsProd, critical, low]
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+      Unit: Seconds

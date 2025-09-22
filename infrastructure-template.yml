@@ -1,0 +1,687 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Complete ECS + EC2 + RDS infrastructure with custom domain support'
+
+Parameters:
+  ServiceName:
+    Description: Name of your service (will be used as prefix for all resources)
+    Type: String
+    Default: ecommerce
+
+  Environment:
+    Description: Environment name (dev, staging, prod)
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  DomainName:
+    Description: Custom domain name (e.g., ecommerce.itmf.com.vn)
+    Type: String
+    Default: dev-ecommerce.itmf.com.vn
+
+  BackendImageUri:
+    Description: ECR URI for backend image
+    Type: String
+    Default: 142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app/backend:latest
+
+  FrontendImageUri:
+    Description: ECR URI for frontend image
+    Type: String
+    Default: 142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app/frontend:latest
+
+  InstanceType:
+    Description: EC2 instance type for ECS cluster
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+
+  DatabaseEngine:
+    Description: Database engine type
+    Type: String
+    Default: postgres
+    AllowedValues: [postgres, mysql]
+
+  DatabaseInstanceClass:
+    Description: RDS instance class
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium]
+
+  EnableDatabase:
+    Description: Whether to create RDS database
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+
+Conditions:
+  CreateDatabase: !Equals [!Ref EnableDatabase, 'true']
+  IsProduction: !Equals [!Ref Environment, 'prod']
+
+Resources:
+  # VPC and Networking
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-public-subnet-1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-public-subnet-2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: 10.0.3.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-private-subnet-1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: 10.0.4.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-private-subnet-2
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-public-routes
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  # Security Groups
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ServiceName}-${Environment}-alb-sg
+      GroupDescription: Security group for Application Load Balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-alb-sg
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ServiceName}-${Environment}-ecs-sg
+      GroupDescription: Security group for ECS tasks
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 65535
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-ecs-sg
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: CreateDatabase
+    Properties:
+      GroupName: !Sub ${ServiceName}-${Environment}-db-sg
+      GroupDescription: Security group for RDS database
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !If [!Equals [!Ref DatabaseEngine, 'postgres'], 5432, 3306]
+          ToPort: !If [!Equals [!Ref DatabaseEngine, 'postgres'], 5432, 3306]
+          SourceSecurityGroupId: !Ref ECSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-db-sg
+
+  # Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ServiceName}-${Environment}-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-alb
+
+  # SSL Certificate (if not already exists)
+  SSLCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: Z2YN17T5R711GT  # This should be replaced with your actual hosted zone ID
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-ssl-cert
+
+  # Target Groups
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ServiceName}-${Environment}-backend-tg
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-backend-tg
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ServiceName}-${Environment}-frontend-tg
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: ip
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-frontend-tg
+
+  # ALB Listeners
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Protocol: HTTPS
+            Port: 443
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref SSLCertificate
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+
+  # API routing rule
+  BackendListenerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+      Conditions:
+        - Field: path-pattern
+          Values: ['/api/*', '/health']
+      ListenerArn: !Ref HTTPSListener
+      Priority: 100
+
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${ServiceName}-${Environment}-cluster
+      CapacityProviders:
+        - EC2
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-cluster
+
+  # IAM Role for ECS Tasks
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ServiceName}-${Environment}-task-execution-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: CloudWatchLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+        - PolicyName: SSMParameterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${Environment}/${ServiceName}/*
+
+  # Task Role for application permissions
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ServiceName}-${Environment}-task-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+
+  # CloudWatch Log Groups
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}-${Environment}-backend
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${ServiceName}-${Environment}-frontend
+      RetentionInDays: !If [IsProduction, 30, 7]
+
+  # ECS Task Definitions
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ServiceName}-${Environment}-backend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - EC2
+      ExecutionRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      Cpu: 256
+      Memory: 512
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Ref BackendImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: ENV
+              Value: !Ref Environment
+            - Name: PORT
+              Value: '8080'
+            - Name: DATABASE_URL
+              Value: !If
+                - CreateDatabase
+                - !Sub
+                  - '${engine}://${username}:${password}@${endpoint}:${port}/${dbname}'
+                  - engine: !If [!Equals [!Ref DatabaseEngine, 'postgres'], 'postgresql', 'mysql']
+                    username: !If [CreateDatabase, !Ref DatabaseMasterUsername, 'admin']
+                    password: !If [CreateDatabase, !Ref DatabaseMasterPassword, 'password']
+                    endpoint: !If [CreateDatabase, !GetAtt Database.Endpoint.Address, 'localhost']
+                    port: !If [CreateDatabase, !GetAtt Database.Endpoint.Port, '5432']
+                    dbname: !If [CreateDatabase, !Ref DatabaseName, 'ecommerce']
+                - 'postgresql://admin:password@localhost:5432/ecommerce'
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${ServiceName}-${Environment}-frontend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - EC2
+      ExecutionRoleArn: !Ref TaskExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      Cpu: 256
+      Memory: 256
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+  # Auto Scaling Group and Launch Template for ECS
+  ECSInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ServiceName}-${Environment}-ecs-instance-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ServiceName}-${Environment}-ecs-instance-profile
+      Roles:
+        - !Ref ECSInstanceRole
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${ServiceName}-${Environment}-lt
+      LaunchTemplateData:
+        ImageId: ami-0d07675d294f17973  # Amazon Linux 2 ECS-optimized AMI for ap-southeast-1
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt ECSInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref ECSSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+            yum update -y
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${ServiceName}-${Environment}-ecs-instance
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${ServiceName}-${Environment}-asg
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-asg
+          PropagateAtLaunch: false
+
+  # ECS Services
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPSListener
+      - AutoScalingGroup
+    Properties:
+      ServiceName: !Sub ${ServiceName}-${Environment}-backend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DesiredCount: 1
+      LaunchType: EC2
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref BackendTargetGroup
+      HealthCheckGracePeriodSeconds: 300
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn:
+      - HTTPSListener
+      - AutoScalingGroup
+    Properties:
+      ServiceName: !Sub ${ServiceName}-${Environment}-frontend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DesiredCount: 1
+      LaunchType: EC2
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref FrontendTargetGroup
+      HealthCheckGracePeriodSeconds: 300
+
+  # Database Subnet Group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Condition: CreateDatabase
+    Properties:
+      DBSubnetGroupName: !Sub ${ServiceName}-${Environment}-db-subnet-group
+      DBSubnetGroupDescription: Subnet group for RDS database
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-db-subnet-group
+
+  # Database Parameters
+  DatabaseMasterUsername:
+    Type: AWS::SSM::Parameter
+    Condition: CreateDatabase
+    Properties:
+      Name: !Sub /${Environment}/${ServiceName}/database/username
+      Type: String
+      Value: admin
+      Description: Database master username
+
+  DatabaseMasterPassword:
+    Type: AWS::SSM::Parameter
+    Condition: CreateDatabase
+    Properties:
+      Name: !Sub /${Environment}/${ServiceName}/database/password
+      Type: SecureString
+      Value: !Sub '${ServiceName}${Environment}2024!'
+      Description: Database master password
+
+  DatabaseName:
+    Type: AWS::SSM::Parameter
+    Condition: CreateDatabase
+    Properties:
+      Name: !Sub /${Environment}/${ServiceName}/database/name
+      Type: String
+      Value: !Ref ServiceName
+      Description: Database name
+
+  # RDS Database
+  Database:
+    Type: AWS::RDS::DBInstance
+    Condition: CreateDatabase
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${ServiceName}-${Environment}-db
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      Engine: !Ref DatabaseEngine
+      EngineVersion: !If
+        - !Equals [!Ref DatabaseEngine, 'postgres']
+        - '13.13'
+        - '8.0.35'
+      MasterUsername: !Ref DatabaseMasterUsername
+      MasterUserPassword: !Ref DatabaseMasterPassword
+      DBName: !Ref DatabaseName
+      AllocatedStorage: 20
+      StorageType: gp2
+      StorageEncrypted: true
+      VPCSecurityGroups:
+        - !Ref DatabaseSecurityGroup
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      DeleteAutomatedBackups: !If [IsProduction, false, true]
+      DeletionProtection: !If [IsProduction, true, false]
+      MultiAZ: !If [IsProduction, true, false]
+      Tags:
+        - Key: Name
+          Value: !Sub ${ServiceName}-${Environment}-database
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-vpc-id
+
+  ALBDNSName:
+    Description: Application Load Balancer DNS name
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-alb-dns
+
+  ApplicationURL:
+    Description: Application URL with custom domain
+    Value: !Sub https://${DomainName}
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-app-url
+
+  BackendURL:
+    Description: Backend API URL
+    Value: !Sub https://${DomainName}/api
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-backend-url
+
+  ClusterName:
+    Description: ECS Cluster name
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-cluster-name
+
+  DatabaseEndpoint:
+    Condition: CreateDatabase
+    Description: Database endpoint
+    Value: !GetAtt Database.Endpoint.Address
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-db-endpoint
+
+  SSLCertificateArn:
+    Description: SSL Certificate ARN
+    Value: !Ref SSLCertificate
+    Export:
+      Name: !Sub ${ServiceName}-${Environment}-ssl-cert-arn

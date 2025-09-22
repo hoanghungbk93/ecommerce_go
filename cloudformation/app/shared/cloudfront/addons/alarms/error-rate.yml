@@ -1,0 +1,139 @@
+---
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+  MetricName:
+    Type: String
+    AllowedValues:
+      - 4xxErrorRate
+      - 5xxErrorRate
+      - TotalErrorRate
+      - LambdaExecutionError
+      - LambdaValidationError
+  VerticalName:
+    Type: String
+  DistributionId:
+    Type: String
+  Threshold:
+    Type: Number
+    Description: >-
+      Percentage at which this alarm should be triggered by <MetricName>
+
+  ProjectName:
+    Type: String
+    Default: ""
+  AlarmLevel:
+    Description: >
+      The level of the V2 alarm to appear in the alarm description for severity routing purposes.
+      If not using an alarm target, this value is ignored and the v1 low/critical routing logic
+      will be used instead.
+    Type: String
+    AllowedPattern: "(?i:crit(ical)?|err(or)?|warn(ing)?|low|info)"
+    Default: "critical"
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "${EnvironmentName}:alarm-target:${AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  EvaluationPeriods:
+    Type: Number
+    Default: 5
+  Period:
+    Type: Number
+    Default: 60
+  Statistic:
+    Type: String
+    Default: Average
+
+  Urgency:
+    Type: String
+    Description: >-
+      Override urgency for this alarm
+    Default: ""
+    AllowedValues: ["", critical, low]
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+  HasUrgencyOverride: !Not [!Equals [!Ref Urgency, ""]]
+
+Resources:
+  ErrorRateAlarmShort:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !If
+        - HasAlarmTarget
+        - !Sub >-
+          warn: ${EnvironmentName}-${ProjectName}
+          Cloudfront Distribution ${MetricName} is above the configured threshold of ${Threshold}
+        - !Ref AWS::NoValue
+      Namespace: AWS/CloudFront
+      MetricName: !Ref MetricName
+      TreatMissingData: notBreaching
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref DistributionId
+        - Name: Region
+          Value: Global
+      Statistic: !Ref Statistic
+      Period: !Ref Period
+      EvaluationPeriods: !Ref EvaluationPeriods
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref Threshold
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-low-urgency-alerts-topic-arn
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-low-urgency-alerts-topic-arn
+
+  ErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: !If
+        - HasAlarmTarget
+        - !Sub >-
+          ${AlarmLevel}: ${EnvironmentName}-${ProjectName}
+          Cloudfront Distribution ${MetricName} is above the configured threshold of ${Threshold}
+          for an extended time
+        - !Ref AWS::NoValue
+      Namespace: AWS/CloudFront
+      MetricName: !Ref MetricName
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref DistributionId
+      Statistic: !Ref Statistic
+      Period: !Ref Period
+      EvaluationPeriods: !Ref EvaluationPeriods
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref Threshold
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If [IsEnvProd, critical, low]
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - Fn::ImportValue: !Sub
+              - ${EnvironmentName}-${VerticalName}-${Urgency}-urgency-alerts-topic-arn
+              - Urgency: !If
+                  - HasUrgencyOverride
+                  - !Ref Urgency
+                  - !If [IsEnvProd, critical, low]
+# vim: set ft=yaml.cloudformation :

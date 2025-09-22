@@ -1,0 +1,363 @@
+Description: This template creates a static site that redirects all requests to one specific url.
+
+# This would have used lambda at edge, but the first link states that s3 static-site magic is not honored by cloudfront direct s3 access.
+# So to get that magic behind cloudfront you need to expose the s3 site url.
+# For the purposes of this template, lambda at edge was slow and more costly (money and latency) since I just want to redirect.
+#
+# Also looks like AWS is bugged and a domain-level redirect is exposed to the world regardless of s3 not being explicitly exposed.
+#
+# refs:
+#   https://forums.aws.amazon.com/thread.jspa?threadID=116243
+#   https://docs.aws.amazon.com/AmazonS3/latest/dev/how-to-page-redirect.html
+#   https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/http-3xx-status-codes.html
+#   https://docs.aws.amazon.com/cloudfront/latest/APIReference/API_LambdaFunctionAssociation.html
+#   https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-event-structure.html
+#   https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-generating-http-responses.html
+#   https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/lambda-examples.html#lambda-examples-http-redirect
+#
+
+# Note: Magic Cloudfront Zone ID = "Z2FDTNDATAQYW2"
+# Ref: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  ProjectName:
+    Description: >
+      The project name of the static site. Should be the github repository name.
+      This value is used to create permanent s3 buckets and should NOT change over time.
+    Type: String
+
+  IsDomainRoot:
+    Description: Sets if the static site supports 'www.domain.com' and 'domain.com' aliases.
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  DNSName:
+    Description: >
+      The name of the alias created for the CloudFrontDistribution. If not specified,
+      ${EnvironmentName}-${ProjectName} will be used.
+    Type: String
+    Default: ""
+
+  BucketSuffix:
+    Description: >
+      Leave empty unless you need to work around existing bucket names.
+      Note that this value will have a dash added to the front of it automatically.
+      A value like '20180323' will effectively be a suffix of '-20180323'
+    Type: String
+    Default: ""
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns these resources. The vertical name is required
+      to be lowercase, relatively short, and without spaces.
+    Type: String
+
+  DomainName:
+    Description: >
+      The domain name to be used for this static site. Also used for SSL.
+    Type: String
+
+  RedirectHostName:
+    Description: >
+      The 'example.com' part of the target url https://example.com/welcome/home.html
+    Type: String
+
+  RedirectHttpCode:
+    Description: >
+      The redirection code that should be used.
+    Type: Number
+    Default: 307
+    AllowedValues: [301, 302, 303, 307, 308]
+
+  RedirectProtocol:
+    Description: >
+      The 'https' part of the target url https://example.com/welcome/home.html
+    Type: String
+    Default: https
+    AllowedValues: [https, http]
+
+  RedirectIncludeQuery:
+    Description: >
+      A boolean to indicate if query parameters on the deprecated domain's url should be included in the redirect target url.
+      e.g. with false: https://old.com?v=0 -> https://new.com
+      e.g. with true: https://old.com?v=0 -> https://new.com?v=0
+    Type: String
+    Default: false
+    AllowedValues: [true, false]
+
+  RedirectUri:
+    Description: >
+      The 'welcome/home.html' part of the target url https://example.com/welcome/home.html
+      Can be present only if RedirectPrefix is not provided.
+    Type: String
+    Default: ""
+
+  RedirectPrefix:
+    Description: >
+      The object key prefix to use in the redirect request.
+      Can be present only if RedirectUri is not provided.
+    Type: String
+    Default: ""
+
+  SiteAlias:
+    Description: >
+      An optional additional alias to use for the static site.
+      This alias is usually managed in manual ways by people for reasons like stack deprecation and minimized downtime.
+      Hopefully AWS releases CloudFormation pre-existing resource allocaiton and management soon so anti-patterns like
+      this can do away.
+    Type: String
+    Default: ""
+
+  PublicRecordSetWeight:
+    Description: >
+      An optional weight for the public record set.
+      This must be specified in order to deprecate domains which already have a weighted A record set.
+    Type: String
+    Default: ""
+
+Metadata:
+  cfn-lint:
+    config:
+      ignore_checks:
+        - E7001
+
+Mappings:
+  CertArnByDomain:
+    "Fn::Transform":
+      Name: "AWS::Include"
+      Parameters:
+        Location: >-
+          s3://cloudformation.adela.it/templates/shared/includes/mappings/cert-domain-arn-map.yml
+
+  # https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_website_region_endpoints
+  # Last Updated: 2018-03-21
+  HostedZoneIds:
+    ap-southeast-1:
+      s3: Z3AQBSTGFYJSTF
+    us-east-2:
+      s3: Z2O1EMRO9K5GLX
+    us-west-1:
+      s3: Z2F56UZL2M1ACD
+    us-west-2:
+      S3: Z3BJ6K6RIION7M
+    ca-central-1:
+      s3: Z1QDHH18159H29
+    ap-south-1:
+      s3: Z11RGJOFQNVJUP
+    ap-northeast-2:
+      s3: Z3W03O7B5YMIYP
+    ap-northeast-3:
+      s3: Z2YQB5RD63NC85
+    ap-southeast-1:
+      s3: Z3O0J2DXBE1FTB
+    ap-southeast-2:
+      s3: Z1WCIGYICN2BYD
+    ap-northeast-1:
+      s3: Z2M4EHUR26P7ZW
+    eu-central-1:
+      s3: Z21DNDUVLTQW6Q
+    eu-west-1:
+      s3: Z1BKCTXD74EZPE
+    eu-west-2:
+      s3: Z3GKZC51ZF0DB4
+    eu-west-3:
+      s3: Z3R1K369G5AVDG
+    sa-east-1:
+      s3: Z7KQH4QJS55SO
+
+  # "Currently, you can specify only certificates that are in the US East (N. Virginia) region."
+  # ( when configuring cloudfront )
+  # Doclink: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-cloudfront-distribution-viewercertificate.html#cfn-cloudfront-distribution-viewercertificate-acmcertificatearn
+
+Conditions:
+  HasDNSName: !Not [!Equals [!Ref DNSName, ""]]
+  HasBucketSuffix: !Not [!Equals [!Ref BucketSuffix, ""]]
+  HasDomainRootAliases: !Equals [!Ref IsDomainRoot, "true"]
+  HasEnvironmentProd: !Equals [!Ref EnvironmentName, "prod"]
+  HasSiteAlias: !Not [!Equals [!Ref SiteAlias, ""]]
+  HasRedirectUri: !Not [!Equals [!Ref RedirectUri, ""]]
+  HasRedirectPrefix: !Not [!Equals [!Ref RedirectPrefix, ""]]
+  HasPublicRecordSetWeight: !Not [!Equals [!Ref PublicRecordSetWeight, ""]]
+
+Resources:
+  LoggingBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ""
+        - - !Sub ${EnvironmentName}-${VerticalName}-${ProjectName}-logs
+          - !If [HasBucketSuffix, "-", ""]
+          - !Ref BucketSuffix
+      AccessControl: LogDeliveryWrite
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierRule
+            Status: Enabled
+            ExpirationInDays: "365"
+            Transitions:
+              - TransitionInDays: "90"
+                StorageClass: Glacier
+
+  LoggingBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - LoggingBucket
+    Properties:
+      Bucket: !Ref LoggingBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${LoggingBucket}
+              - !Sub arn:aws:s3:::${LoggingBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+
+  SiteBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - LoggingBucket
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join
+        - ""
+        - - !Sub ${EnvironmentName}-${VerticalName}-${ProjectName}-site
+          - !If [HasBucketSuffix, "-", ""]
+          - !Ref BucketSuffix
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: s3/
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        RoutingRules:
+          - RedirectRule:
+              HostName: !Ref RedirectHostName
+              HttpRedirectCode: !Ref RedirectHttpCode
+              Protocol: !Ref RedirectProtocol
+              ReplaceKeyWith:
+                !If [HasRedirectUri, !Ref RedirectUri, !Ref AWS::NoValue]
+              ReplaceKeyPrefixWith:
+                !If [HasRedirectPrefix, !Ref RedirectPrefix, !Ref AWS::NoValue]
+      VersioningConfiguration:
+        Status: Enabled
+
+  SiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    DependsOn:
+      - SiteBucket
+    Properties:
+      Bucket: !Ref SiteBucket
+      PolicyDocument:
+        Statement:
+          - Action:
+              - s3:*
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${SiteBucket}
+              - !Sub arn:aws:s3:::${SiteBucket}/*
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    DependsOn:
+      - SiteBucket
+      - SiteBucketPolicy
+      - LoggingBucket
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !If
+            - HasDomainRootAliases
+            - !Sub www.${DomainName}
+            - !Ref AWS::NoValue
+          - !If
+            - HasDomainRootAliases
+            - !Ref DomainName
+            - !Ref AWS::NoValue
+          - !If
+            - HasSiteAlias
+            - !Ref SiteAlias
+            - !Ref AWS::NoValue
+          - !Join
+            - .
+            - - !If [
+                  HasDNSName,
+                  !Ref DNSName,
+                  !Sub "${EnvironmentName}-${ProjectName}",
+                ]
+              - !Ref DomainName
+        Comment: !Join
+          - ""
+          - - !Sub Public static website ${EnvironmentName}-${ProjectName}
+            - !If [HasDNSName, !Sub " alias=${DNSName}", ""]
+        Logging:
+          Bucket: !GetAtt LoggingBucket.DomainName
+          IncludeCookies: false
+          Prefix: cloudfront/
+        Origins:
+          - DomainName: !Select [2, !Split [/, !GetAtt SiteBucket.WebsiteURL]]
+            Id: s3origin
+            CustomOriginConfig:
+              OriginProtocolPolicy: http-only
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - DELETE
+            - GET
+            - HEAD
+            - OPTIONS
+            - PATCH
+            - POST
+            - PUT
+          ForwardedValues:
+            QueryString: !Ref RedirectIncludeQuery
+            Cookies:
+              Forward: none
+          TargetOriginId: s3origin
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: ""
+        Enabled: true
+        HttpVersion: http2
+        PriceClass: !If
+          - HasEnvironmentProd
+          - PriceClass_All
+          - PriceClass_100
+        ViewerCertificate:
+          AcmCertificateArn: !FindInMap [CertArnByDomain, !Ref DomainName, Arn]
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2018
+
+  PublicCloudFrontRecordSet:
+    Type: AWS::Route53::RecordSet
+    DependsOn:
+      - CloudFrontDistribution
+    Properties:
+      Comment: !Sub DNS for external communication to the ${EnvironmentName}-${ProjectName} static CloudFront site.
+      HostedZoneName: !Sub ${DomainName}.
+      Name: !Join
+        - ""
+        - - !If [
+              HasDNSName,
+              !Ref DNSName,
+              !Sub "${EnvironmentName}-${ProjectName}",
+            ]
+          - .
+          - !Ref DomainName
+          - .
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+      SetIdentifier: !If [HasPublicRecordSetWeight, !Ref AWS::StackName, !Ref AWS::NoValue]
+      Weight: !If [HasPublicRecordSetWeight, !Ref PublicRecordSetWeight, !Ref AWS::NoValue]

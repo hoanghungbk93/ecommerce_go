@@ -1,0 +1,18 @@
+Description: Creates S3 buckets used in each environment.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Resources:
+
+  FirehosesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${EnvironmentName}-firehoses.liketoknow.it
+      Tags:
+        - Key: Vertical
+          Value: ltk

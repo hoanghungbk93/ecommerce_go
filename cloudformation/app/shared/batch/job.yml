@@ -1,0 +1,137 @@
+Description: Creates AWS batch job to run through compute environment.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the service. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  ComputeEnvironmentName:
+    Description: The name of the compute environment.
+    Type: String
+
+  JobDefinitionName:
+    Description: The name of the job definition.
+    Type: String
+
+  ContainerImage:
+    Description: The container image from ECR.
+    Type: String
+
+  ContainerVcpus:
+    Description: The number of vCPUs reserved for the container.
+    Type: Number
+    Default: 8 
+
+  ContainerMemory:
+    Description: The hard limit (in MiB) of memory to present to the container.
+    Type: Number
+    Default: 60000
+
+  ContainerCommands:
+    Description: The container commands.
+    Type: String
+
+  ContainerReadonlyRootFilesystem:
+    Type: String
+    Default: false 
+    AllowedValues: [true, false]
+
+  ContainerPrivileged:
+    Description: Elevated privileges on the host container instance (similar to the root user).
+    Type: String
+    Default: false 
+    AllowedValues: [true, false]
+
+  JobRetryAttempts:
+    Description: The number of times to move a job to the RUNNABLE status.
+    Type: Number
+    Default: 1 
+
+  JobQueueName:
+    Description: The name of the job queue.
+    Type: String
+
+  JobQueuePriority:
+    Description: The priority of the job queue.
+    Type: Number
+    Default: 1
+
+Resources:
+
+  JobRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Policies:
+        -
+          PolicyName: "job_role"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action: "kms:Decrypt"
+                Resource:
+                  Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+              -
+                Effect: "Allow"
+                Action:
+                    - "ssm:GetParameter"
+                    - "ssm:GetParameters"
+                Resource: "*"
+              -
+                Effect: "Allow"
+                Action: "s3:*"
+                Resource: "*"
+      RoleName: !Sub ${EnvironmentName}-${VerticalName}-batch-job-role
+
+  JobDefinition:
+    Type: "AWS::Batch::JobDefinition"
+    Properties:
+      JobDefinitionName: !Sub ${EnvironmentName}-${JobDefinitionName}
+      Type: "container"
+      Parameters:
+        job: "panamax"
+      ContainerProperties:
+        Image: !Ref ContainerImage
+        Vcpus: !Ref ContainerVcpus
+        Memory: !Ref ContainerMemory
+        Command: !Split
+          - ","
+          - !Ref ContainerCommands
+        JobRoleArn: !Ref JobRole
+        ReadonlyRootFilesystem: !Ref ContainerReadonlyRootFilesystem
+        Privileged: !Ref ContainerPrivileged
+      RetryStrategy:
+          Attempts: !Ref JobRetryAttempts
+
+  JobQueue:
+    Type: "AWS::Batch::JobQueue"
+    Properties:
+      JobQueueName: !Ref JobQueueName
+      State: "ENABLED"
+      Priority: !Ref JobQueuePriority
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref ComputeEnvironmentName
+

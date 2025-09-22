@@ -10,16 +10,41 @@ env:
   ENV: dev
 
 jobs:
-  test:
+  detect-changes:
     runs-on: ubuntu-latest
+    outputs:
+      backend-changed: ${{ steps.changes.outputs.backend }}
+      frontend-changed: ${{ steps.changes.outputs.frontend }}
+      any-changed: ${{ steps.changes.outputs.backend == 'true' || steps.changes.outputs.frontend == 'true' }}
     steps:
     - uses: actions/checkout@v4
-    
+      with:
+        fetch-depth: 0
+
+    - uses: dorny/paths-filter@v2
+      id: changes
+      with:
+        filters: |
+          backend:
+            - 'backend/**'
+            - 'docker-compose.prod.yml'
+            - 'Makefile'
+          frontend:
+            - 'frontend/**'
+            - 'docker-compose.prod.yml'
+
+  test-backend:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend-changed == 'true'
+    steps:
+    - uses: actions/checkout@v4
+
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
         go-version: '1.21'
-    
+
     - name: Cache Go modules
       uses: actions/cache@v3
       with:
@@ -27,18 +52,25 @@ jobs:
         key: ${{ runner.os }}-go-${{ hashFiles('backend/go.sum') }}
         restore-keys: |
           ${{ runner.os }}-go-
-    
+
     - name: Install dependencies
       working-directory: ./backend
       run: go mod download
-    
+
     - name: Run backend tests
       working-directory: ./backend
       run: go test -v ./...
-    
+
     - name: Build backend
       working-directory: ./backend
       run: go build -v ./...
+
+  test-frontend:
+    runs-on: ubuntu-latest
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend-changed == 'true'
+    steps:
+    - uses: actions/checkout@v4
 
     - name: Set up Node.js
       uses: actions/setup-node@v4
@@ -46,23 +78,23 @@ jobs:
         node-version: '18'
         cache: 'npm'
         cache-dependency-path: frontend/package-lock.json
-    
+
     - name: Install frontend dependencies
       working-directory: ./frontend
       run: npm ci
-    
+
     - name: Build frontend
       working-directory: ./frontend
       run: npm run build
 
   deploy:
-    needs: test
+    needs: [detect-changes, test-backend, test-frontend]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/master'
-    
+    if: always() && github.ref == 'refs/heads/master' && needs.detect-changes.outputs.any-changed == 'true' && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped')
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Configure AWS credentials
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -78,93 +110,165 @@ jobs:
       id: get-account-id
       run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> $GITHUB_OUTPUT
 
+    - name: Set up Docker Buildx
+      if: needs.detect-changes.outputs.backend-changed == 'true' || needs.detect-changes.outputs.frontend-changed == 'true'
+      uses: docker/setup-buildx-action@v3
+
     - name: Build backend Docker image
+      if: needs.detect-changes.outputs.backend-changed == 'true'
       working-directory: ./backend
       run: |
-        docker build -t ecommerce-backend:${{ github.sha }} .
-        docker tag ecommerce-backend:${{ github.sha }} ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:${{ github.sha }}
-        docker tag ecommerce-backend:${{ github.sha }} ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:latest
+        echo "🔨 Building backend Docker image with cache optimization..."
+
+        # Pull latest image for cache
+        docker pull ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:latest || true
+
+        # Build with cache from previous build
+        docker buildx build \
+          --cache-from ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:latest \
+          --tag ecommerce-backend:${{ github.sha }} \
+          --tag ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:${{ github.sha }} \
+          --tag ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:latest \
+          --load \
+          .
 
     - name: Get backend URL for frontend build
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
       id: get-backend-url
       run: |
-        BACKEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text 2>/dev/null || echo "")
-        if [ -z "$BACKEND_URL" ]; then
-          echo "⚠️  Backend URL not found, using placeholder"
-          BACKEND_URL="http://localhost:8080"
+        # Use custom domains based on environment
+        if [ "${{ env.ENV }}" == "dev" ]; then
+          BACKEND_URL="https://dev-api-ecommerce.itmf.com.vn"
+          echo "Using dev custom domain: $BACKEND_URL"
+        elif [ "${{ env.ENV }}" == "prod" ]; then
+          BACKEND_URL="https://api-ecommerce.itmf.com.vn"
+          echo "Using prod custom domain: $BACKEND_URL"
+        else
+          # Fallback to CloudFormation output for other environments
+          BACKEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text 2>/dev/null || echo "")
+          if [ -z "$BACKEND_URL" ]; then
+            echo "⚠️  Backend URL not found, using localhost fallback"
+            BACKEND_URL="http://localhost:8080"
+          fi
         fi
         echo "backend_url=$BACKEND_URL" >> $GITHUB_OUTPUT
 
     - name: Build frontend Docker image
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
       working-directory: ./frontend
       run: |
-        docker build --build-arg REACT_APP_API_URL="${{ steps.get-backend-url.outputs.backend_url }}/api/v1" -t ecommerce-frontend:${{ github.sha }} .
-        docker tag ecommerce-frontend:${{ github.sha }} ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }}
-        docker tag ecommerce-frontend:${{ github.sha }} ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest
+        echo "🔨 Building frontend Docker image with cache optimization..."
+
+        # Pull latest image for cache
+        docker pull ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest || true
+
+        # Build with cache from previous build
+        docker buildx build \
+          --cache-from ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest \
+          --build-arg REACT_APP_API_URL="${{ steps.get-backend-url.outputs.backend_url }}/api/v1" \
+          --tag ecommerce-frontend:${{ github.sha }} \
+          --tag ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }} \
+          --tag ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest \
+          --load \
+          .
 
     - name: Push backend image to ECR
+      if: needs.detect-changes.outputs.backend-changed == 'true'
       run: |
+        echo "⬆️ Pushing backend image to ECR..."
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:${{ github.sha }}
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:latest
 
     - name: Push frontend image to ECR
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
       run: |
+        echo "⬆️ Pushing frontend image to ECR..."
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }}
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest
 
     - name: Update CloudFormation parameters with git SHA
       run: |
-        sed -i 's/"latest"/"${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}.json
+        sed -i 's/"latest"/"${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
 
     - name: Deploy to AWS
       run: |
         aws cloudformation deploy \
-          --template-file cloudformation/app/template.yml \
-          --stack-name ${{ env.ENV }}-ecommerce-app \
-          --parameter-overrides file://cloudformation/app/${{ env.ENV }}.json \
-          --capabilities CAPABILITY_NAMED_IAM \
-          --region ${{ env.AWS_REGION }}
+          --template-file cloudformation/app/template-ec2.yml \
+          --stack-name ${{ env.ENV }}-ecommerce-ec2-app \
+          --parameter-overrides file://cloudformation/app/${{ env.ENV }}-ec2.json \
+          --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+          --region ${{ env.AWS_REGION }} \
+          --no-fail-on-empty-changeset
 
-    - name: Update service to use new image
+    - name: Update backend service
+      if: needs.detect-changes.outputs.backend-changed == 'true'
       run: |
-        aws ecs update-service \
-          --cluster ${{ env.ENV }}-ecommerce-cluster \
-          --service ${{ env.ENV }}-ecommerce-backend \
-          --force-new-deployment \
-          --region ${{ env.AWS_REGION }}
-        
-        aws ecs update-service \
-          --cluster ${{ env.ENV }}-ecommerce-cluster \
-          --service ${{ env.ENV }}-ecommerce-frontend \
-          --force-new-deployment \
-          --region ${{ env.AWS_REGION }}
+        echo "🔄 Updating backend ECS service..."
+        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_NAME" ]; then
+          aws ecs update-service \
+            --cluster "$CLUSTER_NAME" \
+            --service ${{ env.ENV }}-ecommerce-backend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+        else
+          echo "❌ Cluster not found"
+          exit 1
+        fi
 
-    - name: Wait for deployment to complete
+    - name: Update frontend service
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
+      run: |
+        echo "🔄 Updating frontend ECS service..."
+        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_NAME" ]; then
+          aws ecs update-service \
+            --cluster "$CLUSTER_NAME" \
+            --service ${{ env.ENV }}-ecommerce-frontend \
+            --force-new-deployment \
+            --region ${{ env.AWS_REGION }}
+        else
+          echo "❌ Cluster not found"
+          exit 1
+        fi
+
+    - name: Wait for backend deployment to complete
+      if: needs.detect-changes.outputs.backend-changed == 'true'
       run: |
         echo "⏳ Waiting for backend service to stabilize..."
-        aws ecs wait services-stable \
-          --cluster ${{ env.ENV }}-ecommerce-cluster \
-          --services ${{ env.ENV }}-ecommerce-backend \
-          --region ${{ env.AWS_REGION }}
-        
+        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_NAME" ]; then
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER_NAME" \
+            --services ${{ env.ENV }}-ecommerce-backend \
+            --region ${{ env.AWS_REGION }}
+        fi
+
+    - name: Wait for frontend deployment to complete
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
+      run: |
         echo "⏳ Waiting for frontend service to stabilize..."
-        aws ecs wait services-stable \
-          --cluster ${{ env.ENV }}-ecommerce-cluster \
-          --services ${{ env.ENV }}-ecommerce-frontend \
-          --region ${{ env.AWS_REGION }}
+        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_NAME" ]; then
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER_NAME" \
+            --services ${{ env.ENV }}-ecommerce-frontend \
+            --region ${{ env.AWS_REGION }}
+        fi
 
     - name: Get deployment URLs
       id: get-urls
       run: |
-        FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Not found")
-        BACKEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Not found")
+        FRONTEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`FrontendUrl`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Not found")
+        BACKEND_URL=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`BackendUrl`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "Not found")
         echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
         echo "backend_url=$BACKEND_URL" >> $GITHUB_OUTPUT
 
-    - name: Health check
+    - name: Backend health check
+      if: needs.detect-changes.outputs.backend-changed == 'true'
       run: |
-        echo "🏥 Performing health checks..."
-        
+        echo "🏥 Performing backend health check..."
+
         if [ "${{ steps.get-urls.outputs.backend_url }}" != "Not found" ]; then
           echo "Testing backend: ${{ steps.get-urls.outputs.backend_url }}/health"
           for i in {1..5}; do
@@ -177,7 +281,12 @@ jobs:
             fi
           done
         fi
-        
+
+    - name: Frontend health check
+      if: needs.detect-changes.outputs.frontend-changed == 'true'
+      run: |
+        echo "🏥 Performing frontend health check..."
+
         if [ "${{ steps.get-urls.outputs.frontend_url }}" != "Not found" ]; then
           echo "Testing frontend: ${{ steps.get-urls.outputs.frontend_url }}"
           for i in {1..3}; do
@@ -195,12 +304,31 @@ jobs:
       run: |
         echo "🎉 Deployment completed successfully!"
         echo ""
+        echo "📋 Components Deployed:"
+        if [ "${{ needs.detect-changes.outputs.backend-changed }}" == "true" ]; then
+          echo "   ✅ Backend (Go API)"
+        else
+          echo "   ⏭️  Backend (No changes detected)"
+        fi
+        if [ "${{ needs.detect-changes.outputs.frontend-changed }}" == "true" ]; then
+          echo "   ✅ Frontend (React App)"
+        else
+          echo "   ⏭️  Frontend (No changes detected)"
+        fi
+        echo ""
         echo "📱 Application URLs:"
         echo "   Frontend: ${{ steps.get-urls.outputs.frontend_url }}"
         echo "   Backend:  ${{ steps.get-urls.outputs.backend_url }}"
         echo ""
-        echo "🐳 Docker Images:"
-        echo "   Backend:  ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:${{ github.sha }}"
-        echo "   Frontend: ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }}"
+        if [ "${{ needs.detect-changes.outputs.backend-changed }}" == "true" ] || [ "${{ needs.detect-changes.outputs.frontend-changed }}" == "true" ]; then
+          echo "🐳 New Docker Images:"
+          if [ "${{ needs.detect-changes.outputs.backend-changed }}" == "true" ]; then
+            echo "   Backend:  ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/backend:${{ github.sha }}"
+          fi
+          if [ "${{ needs.detect-changes.outputs.frontend-changed }}" == "true" ]; then
+            echo "   Frontend: ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }}"
+          fi
+        fi
         echo ""
         echo "🏷️  Git SHA: ${{ github.sha }}"
+        echo "⚡ Build optimized: Only changed components were rebuilt!"

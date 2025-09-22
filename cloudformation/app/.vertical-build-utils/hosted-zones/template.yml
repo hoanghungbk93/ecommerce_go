@@ -1,0 +1,33 @@
+---
+Parameters:
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+  VerticalName:
+    Type: String
+    AllowedPattern: "[a-z][a-z0-9]+"
+
+Resources:
+  PrivateDomain:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name:
+        Fn::ImportValue: !Join
+          - ":"
+          - - !Sub ${EnvironmentName}-${VerticalName}-configs
+            - private-domain-name
+      HostedZoneConfig:
+        Comment: !Sub Hosted zone for internal ${VerticalName} resources.
+      VPCs:
+        - VPCId:
+            Fn::ImportValue: !Join
+              - ":"
+              - - !Ref EnvironmentName
+                - vpc
+                - id
+          VPCRegion: !Ref AWS::Region
+      HostedZoneTags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Vertical
+          Value: !Ref VerticalName

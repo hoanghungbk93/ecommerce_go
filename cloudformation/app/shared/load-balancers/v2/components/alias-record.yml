@@ -1,0 +1,35 @@
+---
+Parameters:
+  LoadBalancerDNSName:
+    Type: String
+
+  LoadBalancerCanonicalHostedZoneID:
+    Type: String
+
+  RecordSetName:
+    Type: String
+
+  HostedZoneName:
+    Type: String
+
+Resources:
+  RecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      Comment: !Sub >-
+        DNS for external communication to the ALB.
+      HostedZoneName: !Sub ${HostedZoneName}.
+      Name: !Sub ${RecordSetName}.${HostedZoneName}.
+      Type: A
+      SetIdentifier: !Ref AWS::StackName
+      Weight: 0
+      AliasTarget:
+        DNSName: !Ref LoadBalancerDNSName
+        HostedZoneId: !Ref LoadBalancerCanonicalHostedZoneID
+        EvaluateTargetHealth: true
+
+Outputs:
+  RecordSet:
+    Value: !Ref RecordSet
+
+# vim: set ft=yaml.cloudformation :

@@ -1,0 +1,434 @@
+Description: Creates an ECS (Fargate) task definition.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the service. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+    Default: ltk
+
+  TaskName:
+    Description: The name of the task.
+    Type: String
+
+  CPU:
+    Description: |
+      The number of CPU units to reserve for the entire deployment.
+      memory parameter:
+        - 256 (.25 vCPU) - Available memory values: 0.5GB, 1GB, 2GB
+        - 512 (.5 vCPU) - 1GB, 2GB, 3GB, 4GB
+        - 1024 (1 vCPU) - 2GB, 3GB, 4GB, 5GB, 6GB, 7GB, 8GB
+        - 2048 (2 vCPU) - Between 4GB and 16GB in 1GB increments
+        - 4096 (4 vCPU) - Between 8GB and 30GB in 1GB increments
+      This is the total CPU used by all containers in the deployed taskdef
+    Type: Number
+
+  TaskCPU:
+    Description: |
+      Total amount of CPU to allocate for the stack.  This is only used if datadog is enabled.  Otherwise task CPU is set to match the CPU parameter.
+    Type: Number
+    Default: -1
+
+  DDCPU:
+    Description: |
+      The amount of CPU to assign to Datadog. Follows same rules as CPU above.
+    Type: Number
+    Default: -1
+
+  Memory:
+    Description: The total number of MiB of memory to reserve for all container within the task.
+    Type: Number
+    Default: -1
+
+  MemoryReservation:
+    Description: The number of MiB of memory to reserve for the container (soft limit).
+    Type: Number
+    Default: -1
+
+  ContainerUrl:
+    Description: The full url to the container.
+    Type: String
+
+  EntryPoint:
+    Description: >
+      The ENTRYPOINT value to pass to the container.
+      See https://docs.docker.com/engine/reference/builder/#entrypoint.
+    Type: CommaDelimitedList
+    Default: ""
+
+  Command:
+    Description: >
+      The CMD value to pass to the container.
+      See https://docs.docker.com/engine/reference/builder/#cmd.
+    Type: CommaDelimitedList
+    Default: ""
+
+  WorkingDirectory:
+    Description: Working directory for the container to run commands.
+    Type: String
+    Default: ""
+
+  TaskRole:
+    Description: >
+      The name of a pre-existing IAM role for each task to assume. If not specified,
+      a role will be created. SSM and KMS access will be added to either.
+    Type: String
+    Default: ""
+
+  UseDatadog:
+    Description: >
+      Will provision a datadog container alongside the primary container
+      to provide tracing and log collection ability.
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  # Begin Datadog parameters
+  DDAgentVersion:
+    Description: The version of the DataDog agent to run.
+    Type: String
+    Default: latest
+
+  DDAPIKey:
+    Description: The DataDog API key.
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: /global/datadog/api-key
+
+  DDAgentLogLevel:
+    Description: Determines the level at which the datadog agent will log.
+    Type: String
+    AllowedValues: [debug, info, error]
+    Default: error
+
+  DDIgnoreResources:
+    Description: Blacklist of regular expressions to disable traces based on the resource name.
+    Type: String
+    Default: '"GET /healthcheck","GET /health","GET /status"'
+
+  DDMemory:
+    Description: >
+      The max number of MiB that each task may consume (hard limit).
+      You must specify one or both of Memory and MemoryReservation.
+    Type: Number
+    Default: -1
+
+  DDMemoryReservation:
+    Description: The number of MiB of memory to reserve for the datadog container (soft limit).
+    Type: Number
+    Default: -1
+
+  DDLoggingEnabled:
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+  # End Datadog parameters
+
+Conditions:
+  HasEntryPoint: !Not [!Equals [!Join ["", !Ref EntryPoint], ""]]
+  HasCommand: !Not [!Equals [!Join ["", !Ref Command], ""]]
+  HasWorkingDirectory: !Not [!Equals [!Ref WorkingDirectory, ""]]
+  HasHardMemoryLimit: !Not [!Equals [!Ref Memory, -1]]
+  HasSoftMemoryLimit: !Not [!Equals [!Ref MemoryReservation, -1]]
+  HasDefaultTaskRole: !Equals [!Ref TaskRole, ""]
+  HasTaskCPULimit: !Not [!Equals [!Ref TaskCPU, -1]]
+  HasDDCPULimit: !Not [!Equals [!Ref DDCPU, -1]]
+  HasDatadog: !Equals [!Ref UseDatadog, true]
+  HasDDHardMemoryLimit: !Not [!Equals [!Ref DDMemory, -1]]
+  HasDDSoftMemoryLimit: !Not [!Equals [!Ref DDMemoryReservation, -1]]
+  NoDatadog: !Not [!Condition HasDatadog]
+  HasDDLoggingEnabled: !Equals [!Ref DDLoggingEnabled, true]
+
+Resources:
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: NoDatadog
+    Properties:
+      Family: !Sub ${EnvironmentName}-${TaskName}
+      Cpu: !Ref CPU
+      Memory: !Ref Memory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !If
+        - HasDefaultTaskRole
+        - !GetAtt DefaultTaskRole.Arn
+        - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}
+      ContainerDefinitions:
+        - Name: !Sub ${EnvironmentName}-${TaskName}
+          EntryPoint: !If
+            - HasEntryPoint
+            - !Ref EntryPoint
+            - !Ref AWS::NoValue
+          Command: !If
+            - HasCommand
+            - !Ref Command
+            - !Ref AWS::NoValue
+          WorkingDirectory: !If
+            - HasWorkingDirectory
+            - !Ref WorkingDirectory
+            - !Ref AWS::NoValue
+          Cpu: !If [HasTaskCPULimit, !Ref TaskCPU, !Ref AWS::NoValue]
+          Memory: !If
+            - HasHardMemoryLimit
+            - !Ref Memory
+            - !Ref AWS::NoValue
+          MemoryReservation: !If
+            - HasSoftMemoryLimit
+            - !Ref MemoryReservation
+            - !Ref AWS::NoValue
+          Essential: true
+          Image: !Ref ContainerUrl
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref TaskName
+          Ulimits:
+            - Name: nofile
+              HardLimit: 1024000
+              SoftLimit: 1024000
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: ENV
+              Value: !Ref EnvironmentName
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: ECS_TASK_NAME
+              Value: !Ref TaskName
+
+  TaskWithDatadogDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Condition: HasDatadog
+    Properties:
+      Family: !Sub ${EnvironmentName}-${TaskName}
+      Cpu: !Ref CPU
+      Memory: !Ref Memory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      TaskRoleArn: !If
+        - HasDefaultTaskRole
+        - !GetAtt DefaultTaskRole.Arn
+        - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}
+      ContainerDefinitions:
+        - Name: !Sub ${EnvironmentName}-${TaskName}
+          EntryPoint: !If
+            - HasEntryPoint
+            - !Ref EntryPoint
+            - !Ref AWS::NoValue
+          Command: !If
+            - HasCommand
+            - !Ref Command
+            - !Ref AWS::NoValue
+          WorkingDirectory: !If
+            - HasWorkingDirectory
+            - !Ref WorkingDirectory
+            - !Ref AWS::NoValue
+          Cpu: !If [HasTaskCPULimit, !Ref TaskCPU, !Ref AWS::NoValue]
+          Memory: !If
+            - HasHardMemoryLimit
+            - !Ref Memory
+            - !Ref AWS::NoValue
+          MemoryReservation: !If
+            - HasSoftMemoryLimit
+            - !Ref MemoryReservation
+            - !Ref AWS::NoValue
+          Essential: true
+          Image: !Ref ContainerUrl
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Ref TaskName
+          Ulimits:
+            - Name: nofile
+              HardLimit: 1024000
+              SoftLimit: 1024000
+          LinuxParameters:
+            InitProcessEnabled: true
+          Environment:
+            - Name: ENV
+              Value: !Ref EnvironmentName
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: ECS_TASK_NAME
+              Value: !Ref TaskName
+            - Name: DATADOG_TRACE_AGENT_HOSTNAME
+              Value: "localhost"
+            - Name: DD_AGENT_HOST
+              Value: "localhost"
+            - Name: PRIVATE_IPV4
+              Value: "localhost"
+          DependsOn:
+            - ContainerName: datadog-agent
+              Condition: "HEALTHY"
+        # DATADOG CONTAINERS
+        - Name: datadog-agent
+          Image: !Sub datadog/agent:${DDAgentVersion}
+          Cpu: !If [HasDDCPULimit, !Ref DDCPU, !Ref AWS::NoValue]
+          Memory: !If
+            - HasDDHardMemoryLimit
+            - !Ref DDMemory
+            - !Ref AWS::NoValue
+          MemoryReservation: !If
+            - HasDDSoftMemoryLimit
+            - !Ref DDMemoryReservation
+            - !Ref AWS::NoValue
+          Essential: true
+          HealthCheck:
+            Command:
+              - "CMD"
+              - "/probe.sh"
+          LinuxParameters:
+            InitProcessEnabled: true
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref CloudWatchLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: !Sub "${EnvironmentName}-datadog"
+          Environment:
+            - Name: ECS_FARGATE
+              Value: "true"
+            - Name: ENV
+              Value: !Ref EnvironmentName
+            - Name: AWS_DEFAULT_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: AWS_REGION
+              Value: !Sub ${AWS::Region}
+            - Name: DD_API_KEY
+              Value: !Ref DDAPIKey
+            - Name: DD_USE_DOGSTATSD
+              Value: "true"
+            - Name: DD_APM_ENABLED
+              Value: "true"
+            - Name: DD_AC_EXCLUDE
+              Value: "image:datadog/agent image:amazon/amazon-ecs-agent"
+            - Name: DD_IGNORE_RESOURCE
+              Value: !Ref DDIgnoreResources
+            - Name: DD_LOG_LEVEL
+              Value: !Ref DDAgentLogLevel
+            - Name: DD_DOGSTATSD_NON_LOCAL_TRAFFIC
+              Value: "true"
+            - Name: DD_TAGS
+              Value: !Join
+                - " "
+                - - !Sub env:${EnvironmentName}
+                  - !Sub vertical:${VerticalName}
+                  - fargate:true
+
+  DefaultTaskRole:
+    Type: AWS::IAM::Role
+    Condition: HasDefaultTaskRole
+    Properties:
+      RoleName: !Sub ${EnvironmentName}-${TaskName}-default-ecs-task-role
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRole
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  # Allow the ECS Tasks to download images from ECR
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  # Allow the ECS tasks to upload logs to CloudWatch
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt CloudWatchLogGroup.Arn
+
+  SSMPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ssm-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  KMSPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !If [HasDefaultTaskRole, !Ref DefaultTaskRole, !Ref TaskRole]
+
+  CloudWatchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${EnvironmentName}-${TaskName}
+      RetentionInDays: 30
+
+  LogsSubscriptionFilterExportToDatadog:
+    Type: AWS::Logs::SubscriptionFilter
+    Condition: HasDDLoggingEnabled
+    Properties:
+      DestinationArn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:v2-dd-exporter-lambda
+      FilterPattern: ""
+      LogGroupName: !Ref CloudWatchLogGroup
+
+Outputs:
+  TaskDefinitionArn:
+    Description: The ARN of the task definition.
+    Value: !If [HasDatadog, !Ref TaskWithDatadogDefinition, !Ref TaskDefinition]
+
+  ECSTaskExecutionRoleArn:
+    Description: The ARN of the task execution role.
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+
+  TaskRoleArn:
+    Description: The ARN of the task's role
+    Value: !If
+      - HasDefaultTaskRole
+      - !GetAtt DefaultTaskRole.Arn
+      - !Sub arn:aws:iam::${AWS::AccountId}:role/${TaskRole}

@@ -1,0 +1,64 @@
+---
+Parameters:
+  VerticalName:
+    Type: String
+    Default: rad
+
+  EnvironmentName:
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+Mappings:
+  Inventory:
+    CloudFormation:
+      BaseURL: https://s3.amazonaws.com/cloudformation.adela.it/templates
+      GitSha: 9a3047083169aa21b65ec2dfa37514487cad641d
+
+Conditions:
+  IsEnvProd: !Equals [!Ref EnvironmentName, prod]
+
+Resources:
+
+  Cluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/${GitSha}/shared/eks/cluster.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+          GitSha: !FindInMap [Inventory, CloudFormation, GitSha]
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        ClusterName: !Sub ${EnvironmentName}-rad
+        KubernetesVersion: '1.10'
+        SubnetIdOverrides: !If
+          - IsEnvProd
+          - !Join
+            - ','
+            - - 'Fn::ImportValue':
+                  !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets:b
+              - 'Fn::ImportValue':
+                  !Sub ${EnvironmentName}:stacksets:v2:env:vpc:private-subnets:c
+              - 'Fn::ImportValue':
+                  !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets:b
+              - 'Fn::ImportValue':
+                  !Sub ${EnvironmentName}:stacksets:v2:env:vpc:public-subnets:c
+          - !Ref AWS::NoValue
+
+  NodeGroup1:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub
+        - ${BaseURL}/${GitSha}/shared/eks/nodegroup.yml
+        - BaseURL: !FindInMap [Inventory, CloudFormation, BaseURL]
+          GitSha: !FindInMap [Inventory, CloudFormation, GitSha]
+      Parameters:
+        VerticalName: !Ref VerticalName
+        EnvironmentName: !Ref EnvironmentName
+        NodeInstanceType: m4.2xlarge
+        NodeGroupName: rad-manual
+        EnableVerticalTaint: false
+        ClusterName: !GetAtt Cluster.Outputs.ClusterName
+        ClusterControlPlaneSecurityGroup: !GetAtt Cluster.Outputs.ControlPlaneSecurityGroup
+
+
+# TODO: python fucntion that reads stack and generates aws-auth cm

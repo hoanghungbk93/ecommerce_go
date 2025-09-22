@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "ServiceName",
+    "ParameterValue": "ecommerce"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "DomainName",
+    "ParameterValue": "dev-ecommerce.itmf.com.vn"
+  },
+  {
+    "ParameterKey": "BackendImageUri",
+    "ParameterValue": "142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app/backend:latest"
+  },
+  {
+    "ParameterKey": "FrontendImageUri",
+    "ParameterValue": "142473567235.dkr.ecr.ap-southeast-1.amazonaws.com/ecommerce-app/frontend:latest"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "t3.micro"
+  },
+  {
+    "ParameterKey": "DatabaseEngine",
+    "ParameterValue": "postgres"
+  },
+  {
+    "ParameterKey": "DatabaseInstanceClass",
+    "ParameterValue": "db.t3.micro"
+  },
+  {
+    "ParameterKey": "EnableDatabase",
+    "ParameterValue": "true"
+  }
+]

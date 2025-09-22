@@ -1,0 +1,59 @@
+config:
+  target: 'http://dev-ecommerce-alb-415161429.ap-southeast-1.elb.amazonaws.com:8080'
+  phases:
+    - duration: 300
+      arrivalRate: 50
+      name: "Stress test - High load"
+    - duration: 180
+      arrivalRate: 100
+      name: "Stress test - Peak load"
+  variables:
+    baseUrl: "http://dev-ecommerce-alb-415161429.ap-southeast-1.elb.amazonaws.com:8080"
+
+scenarios:
+  - name: "Critical Path Test"
+    weight: 40
+    flow:
+      - get:
+          url: "/health"
+      - get:
+          url: "/api/v1/products"
+      - get:
+          url: "/api/v1/categories"
+
+  - name: "Authentication Stress"
+    weight: 35
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          json:
+            email: "admin@test.com"
+            password: "admin123"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+      - get:
+          url: "/api/v1/users/profile"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+
+  - name: "Database Heavy Operations"
+    weight: 25
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          json:
+            email: "admin@test.com"
+            password: "admin123"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+      - get:
+          url: "/api/v1/products"
+          qs:
+            limit: 50
+            page: "{{ $randomInt(1, 10) }}"
+      - get:
+          url: "/api/v1/cart"
+          headers:
+            Authorization: "Bearer {{ authToken }}"

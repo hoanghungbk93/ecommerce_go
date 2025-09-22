@@ -1,0 +1,225 @@
+---
+Description: Creates an ECS cluster with EC2 instances and auto scaling
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+  ClusterName:
+    Description: The name of the ECS cluster
+    Type: String
+
+  InstanceType:
+    Description: EC2 instance type for the ECS cluster
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+
+  MinSize:
+    Description: Minimum number of instances in the ASG
+    Type: Number
+    Default: 1
+
+  MaxSize:
+    Description: Maximum number of instances in the ASG
+    Type: Number
+    Default: 2
+
+  DesiredCapacity:
+    Description: Desired number of instances in the ASG
+    Type: Number
+    Default: 1
+
+  KeyPairName:
+    Description: EC2 Key Pair for SSH access (optional)
+    Type: String
+    Default: ""
+
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+
+Mappings:
+  AWSRegionToAMI:
+    us-east-1:
+      AMI: ami-09d3b3274b6c5d4aa
+    us-west-1:
+      AMI: ami-056ee704806822732
+    us-west-2:
+      AMI: ami-094125af156557ca2
+    eu-west-1:
+      AMI: ami-0c9ef930279337028
+    ap-southeast-1:
+      AMI: ami-0b68661b29b9e058c
+    ap-southeast-2:
+      AMI: ami-00e4b147599c13588
+
+Resources:
+  # ECS Cluster
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-${ClusterName}
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+
+  # Security Group for ECS instances
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: ECS Security Group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 32768
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ClusterName}-sg
+
+  # IAM Role for ECS instances
+  ECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: ecs-service
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:CreateCluster
+                  - ecs:DeregisterContainerInstance
+                  - ecs:DiscoverPollEndpoint
+                  - ecs:Poll
+                  - ecs:RegisterContainerInstance
+                  - ecs:StartTelemetrySession
+                  - ecs:Submit*
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ECSRole
+
+  # Launch Template for ECS instances
+  ECSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${EnvironmentName}-${ClusterName}-launch-template
+      LaunchTemplateData:
+        ImageId: !FindInMap [AWSRegionToAMI, !Ref 'AWS::Region', AMI]
+        InstanceType: !Ref InstanceType
+        IamInstanceProfile:
+          Arn: !GetAtt ECSInstanceProfile.Arn
+        SecurityGroupIds:
+          - !Ref ECSSecurityGroup
+        KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref "AWS::NoValue"]
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            echo ECS_CLUSTER=${ECSCluster} >> /etc/ecs/ecs.config
+            echo ECS_BACKEND_HOST= >> /etc/ecs/ecs.config
+            yum install -y ecs-init
+            service docker start
+            start ecs
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${EnvironmentName}-${ClusterName}-instance
+
+  # Auto Scaling Group
+  ECSAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ECSLaunchTemplate
+        Version: !GetAtt ECSLaunchTemplate.LatestVersionNumber
+      MinSize: !Ref MinSize
+      MaxSize: !Ref MaxSize
+      DesiredCapacity: !Ref DesiredCapacity
+      AvailabilityZones:
+        - !Select [0, !GetAZs '']
+        - !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ClusterName}-asg
+          PropagateAtLaunch: false
+
+  # Auto Scaling Policies
+  ECSAutoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: application-autoscaling.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: service-autoscaling
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - application-autoscaling:*
+                  - cloudwatch:DescribeAlarms
+                  - cloudwatch:PutMetricAlarm
+                  - ecs:DescribeServices
+                  - ecs:UpdateService
+                Resource: '*'
+
+Outputs:
+  ClusterName:
+    Description: The name of the ECS cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub ${EnvironmentName}-${ClusterName}-name
+
+  ECSSecurityGroup:
+    Description: A reference to the security group for ECS hosts
+    Value: !Ref ECSSecurityGroup
+    Export:
+      Name: !Sub ${EnvironmentName}-${ClusterName}-security-group
+
+  ECSAutoScalingRole:
+    Description: A reference to ECS auto scaling role
+    Value: !Ref ECSAutoScalingRole
+    Export:
+      Name: !Sub ${EnvironmentName}-${ClusterName}-autoscaling-role

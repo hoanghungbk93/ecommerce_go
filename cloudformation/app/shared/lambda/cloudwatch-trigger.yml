@@ -1,0 +1,78 @@
+Description: Creates a CloudWatch rule to be used as a lambda trigger.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  CloudWatchRuleName:
+    Description: Name of the CloudWatch rule. This is most useful when multiple CloudWatch events can trigger the lambda function.
+    Type: String
+    Default: ""
+
+  LambdaFunction:
+    Description: The ARN of the lambda function to be triggered by the CloudWatch rule.
+    Type: String
+
+  ScheduleExpression:
+    Description: The CloudWatch rule schedule expression.
+    Type: String
+
+  RuleState:
+    Description: The state of the rule.
+    Type: String
+    AllowedValues: [ENABLED, DISABLED]
+    Default: ENABLED
+
+  Input:
+    Description: >
+      A JSON formatted text string that is passed to the lambda function. This value overrides the matched event.
+      This is most useful when multiple CloudWatch rules are used to trigger a lambda function.
+    Type: String
+    Default: ""
+
+Conditions:
+
+  HasCloudWatchRuleName: !Not [!Equals [!Ref CloudWatchRuleName, ""]]
+  HasInput: !Not [!Equals [!Ref Input, ""]]
+
+Resources:
+
+  CloudWatchRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !If
+        - HasCloudWatchRuleName
+        - !Ref CloudWatchRuleName
+        - !Select [6, !Split [":", !Ref LambdaFunction]]
+      Description: !Sub
+        - Triggers the ${LambdaFunctionName} lambda function.
+        - LambdaFunctionName: !Select [6, !Split [":", !Ref LambdaFunction]]
+      ScheduleExpression: !Ref ScheduleExpression
+      State: !Ref RuleState
+      Targets:
+        - Arn: !Ref LambdaFunction
+          Id: !If
+            - HasCloudWatchRuleName
+            - !Ref CloudWatchRuleName
+            - !Select [6, !Split [":", !Ref LambdaFunction]]
+          Input: !If
+            - HasInput
+            - !Ref Input
+            - !Ref AWS::NoValue
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      FunctionName: !Ref LambdaFunction
+      SourceArn: !GetAtt CloudWatchRule.Arn
+
+Outputs:
+
+  CloudWatchArn:
+    Description: Arn of the Cloudwatch Event.
+    Value: !GetAtt CloudWatchRule.Arn

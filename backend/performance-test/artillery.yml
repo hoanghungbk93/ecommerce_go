@@ -1,0 +1,109 @@
+config:
+  target: 'http://dev-ecommerce-alb-415161429.ap-southeast-1.elb.amazonaws.com:8080'
+  phases:
+    - duration: 60
+      arrivalRate: 5
+      name: "Warm up"
+    - duration: 120
+      arrivalRate: 10
+      name: "Moderate load"
+    - duration: 60
+      arrivalRate: 20
+      name: "High load"
+  payload:
+    path: "test-data.csv"
+    fields:
+      - "email"
+      - "password"
+      - "first_name"
+      - "last_name"
+  variables:
+    baseUrl: "http://dev-ecommerce-alb-415161429.ap-southeast-1.elb.amazonaws.com:8080"
+
+scenarios:
+  - name: "Health Check Test"
+    weight: 10
+    flow:
+      - get:
+          url: "/health"
+          expect:
+            - statusCode: 200
+
+  - name: "Public API Tests"
+    weight: 20
+    flow:
+      - get:
+          url: "/api/v1/products"
+          expect:
+            - statusCode: 200
+      - get:
+          url: "/api/v1/categories"
+          expect:
+            - statusCode: 200
+
+  - name: "Authentication Flow"
+    weight: 30
+    flow:
+      - post:
+          url: "/api/v1/auth/register"
+          json:
+            email: "test{{ $randomString() }}@example.com"
+            password: "testpassword123"
+            first_name: "Test"
+            last_name: "User"
+          capture:
+            - json: "$.message"
+              as: "registerMessage"
+      - post:
+          url: "/api/v1/auth/login"
+          json:
+            email: "test{{ $randomString() }}@example.com"
+            password: "testpassword123"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+          expect:
+            - statusCode: 200
+
+  - name: "Authenticated User Actions"
+    weight: 25
+    flow:
+      - post:
+          url: "/api/v1/auth/login"
+          json:
+            email: "admin@test.com"
+            password: "admin123"
+          capture:
+            - json: "$.access_token"
+              as: "authToken"
+      - get:
+          url: "/api/v1/users/profile"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+      - get:
+          url: "/api/v1/cart"
+          headers:
+            Authorization: "Bearer {{ authToken }}"
+          expect:
+            - statusCode: 200
+
+  - name: "Product Search and Detail"
+    weight: 15
+    flow:
+      - get:
+          url: "/api/v1/products"
+          qs:
+            limit: 10
+            page: 1
+          expect:
+            - statusCode: 200
+          capture:
+            - json: "$[0].id"
+              as: "productId"
+      - get:
+          url: "/api/v1/products/{{ productId }}"
+          ifTrue: "productId"
+          expect:
+            - statusCode: 200

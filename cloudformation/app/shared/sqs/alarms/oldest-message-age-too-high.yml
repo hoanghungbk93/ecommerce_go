@@ -1,0 +1,77 @@
+Description: Creates an alarm for an SQS queue on the oldest message age metric.
+
+Parameters:
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: >
+      The name of the vertical that owns the queue. The vertical name is required
+      to be lowercase as it is used in the naming convention of resources created by
+      this template and by resources on which this template depends.
+    Type: String
+    AllowedPattern: "[a-z]+"
+
+  AlarmTarget:
+    Description: >
+      The alarm target configured in github.com/rewardStyle/aws-alarm-targets
+      This target name will be used to find the exported CloudFormation value in the format "{EnvironmentName}:alarm-target:{AlarmTarget}:arn"
+      If no value is provided, the alerts will default to the "low" and "critical" alarm
+      targets that were defined previously.
+      This should be a human-readable name referencing either a team alarm or a service-level alarm.
+      Numbers should only be used when referencing service-level alarms with a `-v#` suffix 
+    Type: String
+    Default: ""
+    AllowedPattern: "[-a-z0-9]*"
+
+  QueueName:
+    Type: String
+
+  OldestMessageAgeTooHighThreshold:
+    Type: Number
+    # Default: 1
+    MinValue: 1
+
+  OldestMessageAgeTooHighPeriod:
+    Type: Number
+    # Default: 300
+
+  OldestMessageAgeTooHighEvaluationPeriods:
+    Type: Number
+    # Default: 1
+
+  OldestMessageAgeTooHighUrgency:
+    Type: String
+    AllowedValues: ["low", "critical"]
+
+Conditions:
+  HasAlarmTarget: !Not [!Equals [!Ref AlarmTarget, ""]]
+
+Resources:
+  OldestMessageAgeTooHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${EnvironmentName}-${QueueName}-msg-age-too-high
+      AlarmDescription: !Sub "${OldestMessageAgeTooHighUrgency}: sqs: ${EnvironmentName}-${QueueName} oldest message in the  queue is too old."
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Statistic: Average
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: !Ref OldestMessageAgeTooHighThreshold
+      Period: !Ref OldestMessageAgeTooHighPeriod
+      EvaluationPeriods: !Ref OldestMessageAgeTooHighEvaluationPeriods
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub ${EnvironmentName}-${QueueName}
+      OKActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${OldestMessageAgeTooHighUrgency}-urgency-alerts
+      AlarmActions:
+        - !If
+          - HasAlarmTarget
+          - Fn::ImportValue: !Sub ${EnvironmentName}:alarm-target:${AlarmTarget}:arn
+          - !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:${EnvironmentName}-${VerticalName}-${OldestMessageAgeTooHighUrgency}-urgency-alerts

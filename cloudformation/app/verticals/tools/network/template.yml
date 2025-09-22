@@ -1,0 +1,61 @@
+Description: Configures the tools vertical's AWS network
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  VerticalName:
+    Description: The name of the vertical.
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+$"
+
+Conditions:
+  IsDev: !Equals [!Ref EnvironmentName, dev]
+
+Resources:
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsDev
+    Properties:
+      TemplateURL: !Sub https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/vpc/${AWS::Region}.yml
+      Parameters:
+        CidrPrefix: 172.25
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+      Tags:
+        - Key: Environment
+          Value: !Ref EnvironmentName
+        - Key: Vertical
+          Value: !Ref VerticalName
+
+  PublishedVPCConfig:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsDev
+    DependsOn:
+      - VPC
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/vpc/existing.yml
+      Parameters:
+        EnvironmentName: !Ref EnvironmentName
+        PublicSubnets: !GetAtt VPC.Outputs.PublicSubnets
+        PrivateSubnets: !GetAtt VPC.Outputs.PrivateSubnets
+        VpcId: !GetAtt VPC.Outputs.VPCId
+        DefaultSecurityGroup: !GetAtt VPC.Outputs.DefaultSecurityGroup
+
+  VPN:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsDev
+    DependsOn:
+      - VPC
+      - PublishedVPCConfig
+    Properties:
+      TemplateURL: https://s3.amazonaws.com/cloudformation.adela.it/templates/shared/vpc/vpn.yml
+      Parameters:
+        VpnAdminEmail: !Sub devops+${VerticalName}@rewardstyle.com
+        PrivateSubnet: !GetAtt VPC.Outputs.VPCCidrBlock
+        EnvironmentName: !Ref EnvironmentName
+        VerticalName: !Ref VerticalName
+        VpnInstanceType: t1.micro

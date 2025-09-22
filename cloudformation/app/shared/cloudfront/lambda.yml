@@ -1,0 +1,194 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+
+Description: >-
+  Creates lambda functions intended to be used as edge lambdas for CloudFront
+  distributions.
+
+Parameters:
+  EnvironmentName:
+    Type: String
+
+  VerticalName:
+    Description: The name of the vertical that owns the lambda function (should be all lower cased).
+    Type: String
+    Default: ltk
+
+  FunctionName:
+    Type: String
+
+  Runtime:
+    Description: The runtime of the lambda function.
+    Type: String
+    AllowedValues:
+      - nodejs10.x
+      - nodejs12.x
+    Default: nodejs10.x
+
+  Timeout:
+    Description: The number of seconds the lambda function is allowed to run.
+    Type: Number
+    Default: 5
+    MaxValue: 5
+
+  MemorySize:
+    Description: The number of MB the lambda function is allowed to consume.
+    Type: Number
+    MinValue: 128
+    MaxValue: 3008
+
+  Handler:
+    Description: Function within your code that is called to begin execution.
+    Type: String
+    Default: index.handler
+
+  CodeBucket:
+    Type: String
+
+  CodeKey:
+    Type: String
+
+  ReservedConcurrentExecutions:
+    Type: Number
+    Default: 0
+    MinValue: 0
+
+  Tracing:
+    Type: String
+    AllowedValues: [Active, PassThrough]
+    Default: PassThrough
+
+  Description:
+    Type: String
+    Default: ''
+
+  BucketName:
+    Type: String
+    Default: ''
+
+  BucketAccess:
+    Type: String
+    Default: read
+    AllowedValues: ['read', 'write']
+
+Conditions:
+  HasBucketName: !Not [!Equals [!Ref BucketName, '']]
+  HasDescription: !Not [!Equals [!Ref Description, '']]
+  HasBucketWriteAccess: !Equals [!Ref BucketAccess, 'write']
+  HasReservedConcurrentExecutions: !Not [!Equals [!Ref ReservedConcurrentExecutions, 0]]
+
+Resources:
+
+  EdgeFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowLambdaServiceToAssumeRole
+            Effect: Allow
+            Action:
+              - 'sts:AssumeRole'
+            Principal:
+              Service:
+                - 'lambda.amazonaws.com'
+                - 'edgelambda.amazonaws.com'
+
+  EdgeFunctionBucketAccessPolicy:
+    Type: AWS::IAM::Policy
+    Condition: HasBucketName
+    Properties:
+      PolicyName: s3-access
+      Roles:
+        - !Ref EdgeFunctionRole
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:GetObject'
+              - 's3:GetObjectVersion'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}/*'
+          - Effect: Allow
+            Action:
+              - 's3:ListBucket'
+              - 's3:GetBucketLocation'
+            Resource:
+              - !Sub 'arn:aws:s3:::${BucketName}'
+          - !If
+            - HasBucketWriteAccess
+            - Effect: Allow
+              Action:
+                - 's3:PutObject'
+                - 's3:PutObjectAcl'
+                - 's3:DeleteObject'
+              Resource:
+                - !Sub 'arn:aws:s3:::${BucketName}/*'
+            - !Ref AWS::NoValue
+
+  SSMAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ssm-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+            Resource: "*"
+      Roles:
+        - !Ref EdgeFunctionRole
+
+  KMSAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: kms-access
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource:
+              - Fn::ImportValue: !Sub ${EnvironmentName}-${VerticalName}-kms-key-arn
+      Roles:
+        - !Ref EdgeFunctionRole
+
+  EdgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub ${EnvironmentName}-${FunctionName}
+      Handler: !Ref Handler
+      Runtime: !Ref Runtime
+      AutoPublishAlias: latest
+      CodeUri:
+        Bucket: !Ref CodeBucket
+        Key: !Ref CodeKey
+      Description: !If
+        - HasDescription
+        - !Ref Description
+        - !Ref AWS::StackName
+      MemorySize: !Ref MemorySize
+      ReservedConcurrentExecutions: !If
+        - HasReservedConcurrentExecutions
+        - !Ref ReservedConcurrentExecutions
+        - !Ref AWS::NoValue
+      Tracing: !Ref Tracing
+      Timeout: !Ref Timeout
+      Role: !GetAtt EdgeFunctionRole.Arn
+      Tags:
+        Environment: !Ref EnvironmentName
+        Vertical: !Ref VerticalName
+        Name: !Ref FunctionName
+
+Outputs:
+
+  FunctionVersion:
+    Value: !Ref EdgeFunction.Version
+
+  FunctionArn:
+    Value: !GetAtt EdgeFunction.Arn
+
+# vim: set ft=yaml.cloudformation :

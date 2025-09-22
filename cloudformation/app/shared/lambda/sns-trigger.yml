@@ -1,0 +1,33 @@
+Description: Adds an SNS trigger to a lambda function.
+
+Parameters:
+
+  EnvironmentName:
+    Description: The name of the target environment.
+    Type: String
+    AllowedValues: [dev, qa, prod]
+
+  SnsTopic:
+    Description: The ARN of the SNS topic that will trigger the lambda function.
+    Type: String
+
+  LambdaFunction:
+    Description: The ARN of the lambda that will be triggered by the SNS topic.
+    Type: String
+
+Resources:
+
+  Subscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !Ref LambdaFunction
+      TopicArn: !Ref SnsTopic
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      FunctionName: !Ref LambdaFunction
+      SourceArn: !Ref SnsTopic
