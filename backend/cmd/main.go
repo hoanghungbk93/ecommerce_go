@@ -191,5 +191,6 @@ func main() {
 
 	log.Printf("Server starting on port %s", port)
 	log.Println("🚀 E-commerce backend server with Redis caching ready")
+	log.Println("🔄 Testing backend-only CI/CD deployment flow")
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
