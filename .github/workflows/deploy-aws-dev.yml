@@ -208,6 +208,7 @@ jobs:
           aws ecs update-service \
             --cluster "$CLUSTER_NAME" \
             --service ${{ env.ENV }}-ecommerce-backend \
+            --desired-count 1 \
             --force-new-deployment \
             --region ${{ env.AWS_REGION }}
         else
@@ -224,11 +225,38 @@ jobs:
           aws ecs update-service \
             --cluster "$CLUSTER_NAME" \
             --service ${{ env.ENV }}-ecommerce-frontend \
+            --desired-count 1 \
             --force-new-deployment \
             --region ${{ env.AWS_REGION }}
         else
           echo "❌ Cluster not found"
           exit 1
+        fi
+
+    - name: Ensure services are running
+      run: |
+        echo "🚀 Ensuring all services are started..."
+        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
+        if [ -n "$CLUSTER_NAME" ]; then
+          # Ensure backend service is running (only if not already updated)
+          if [ "${{ needs.detect-changes.outputs.backend-changed }}" != "true" ]; then
+            echo "Starting backend service..."
+            aws ecs update-service \
+              --cluster "$CLUSTER_NAME" \
+              --service ${{ env.ENV }}-ecommerce-backend \
+              --desired-count 1 \
+              --region ${{ env.AWS_REGION }} || true
+          fi
+
+          # Ensure frontend service is running (only if not already updated)
+          if [ "${{ needs.detect-changes.outputs.frontend-changed }}" != "true" ]; then
+            echo "Starting frontend service..."
+            aws ecs update-service \
+              --cluster "$CLUSTER_NAME" \
+              --service ${{ env.ENV }}-ecommerce-frontend \
+              --desired-count 1 \
+              --region ${{ env.AWS_REGION }} || true
+          fi
         fi
 
     - name: Wait for backend deployment to complete
