@@ -86,7 +86,7 @@ jobs:
       working-directory: ./frontend
       run: npm run build
 
-  deploy:
+  build-images:
     needs: [detect-changes, test-backend, test-frontend]
     runs-on: ubuntu-latest
     if: always() && github.ref == 'refs/heads/master' && needs.detect-changes.outputs.any-changed == 'true' && (needs.test-backend.result == 'success' || needs.test-backend.result == 'skipped') && (needs.test-frontend.result == 'success' || needs.test-frontend.result == 'skipped')
@@ -185,15 +185,36 @@ jobs:
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:${{ github.sha }}
         docker push ${{ steps.get-account-id.outputs.account_id }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com/ecommerce-app/frontend:latest
 
+  deploy:
+    needs: [detect-changes, build-images]
+    runs-on: ubuntu-latest
+    if: always() && github.ref == 'refs/heads/master' && needs.detect-changes.outputs.any-changed == 'true' && needs.build-images.result == 'success'
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
     - name: Update CloudFormation parameters with git SHA
       run: |
-        # Update git SHA only if any component changed
-        if [ "${{ needs.detect-changes.outputs.any-changed }}" == "true" ]; then
-          echo "Updating GitSha parameter to ${{ github.sha }}"
-          sed -i 's/"latest"/"${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
-        else
-          echo "No changes detected - keeping existing image tags"
+        # Update individual service image tags based on what changed
+        if [ "${{ needs.detect-changes.outputs.backend-changed }}" == "true" ]; then
+          echo "Updating BackendGitSha parameter to ${{ github.sha }}"
+          sed -i 's/"BackendGitSha": *"[^"]*"/"BackendGitSha": "${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
         fi
+
+        if [ "${{ needs.detect-changes.outputs.frontend-changed }}" == "true" ]; then
+          echo "Updating FrontendGitSha parameter to ${{ github.sha }}"
+          sed -i 's/"FrontendGitSha": *"[^"]*"/"FrontendGitSha": "${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
+        fi
+
+        # Keep the main GitSha for backward compatibility but don't change it
+        echo "Keeping main GitSha unchanged for backward compatibility"
 
     - name: Deploy to AWS
       run: |

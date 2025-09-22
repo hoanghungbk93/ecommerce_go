@@ -190,8 +190,6 @@ func main() {
 	}
 
 	log.Printf("Server starting on port %s", port)
-	log.Println("✅ Backend deployment test - CI/CD filter fix applied")
-	log.Println("🔧 Frontend auto-start fix applied - only backend should deploy")
-	log.Println("⚡ Deployment optimized - removed redundant ECS operations and health checks")
+	log.Println("🚀 E-commerce backend server with Redis caching ready")
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }

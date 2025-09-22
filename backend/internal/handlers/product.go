@@ -52,7 +52,7 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 
 		var cachedData services.ProductListCache
 		if err := h.redis.Get(ctx, cacheKey, &cachedData); err == nil {
-			log.Printf("Cache hit for key: %s", cacheKey)
+			log.Printf("🎯 REDIS CACHE HIT for key: %s", cacheKey)
 			c.JSON(http.StatusOK, gin.H{
 				"products": cachedData.Products,
 				"total":    cachedData.Total,
@@ -100,9 +100,9 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 		}
 
 		if err := h.redis.Set(ctx, cacheKey, cacheData, 10*time.Minute); err != nil {
-			log.Printf("Failed to cache data for key %s: %v", cacheKey, err)
+			log.Printf("❌ Failed to cache data for key %s: %v", cacheKey, err)
 		} else {
-			log.Printf("Cached data for key: %s", cacheKey)
+			log.Printf("💾 REDIS CACHE SET for key: %s", cacheKey)
 		}
 	}
 

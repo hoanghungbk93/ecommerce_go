@@ -16,6 +16,14 @@
     "ParameterValue": "latest"
   },
   {
+    "ParameterKey": "BackendGitSha",
+    "ParameterValue": "latest"
+  },
+  {
+    "ParameterKey": "FrontendGitSha",
+    "ParameterValue": "latest"
+  },
+  {
     "ParameterKey": "InstanceType",
     "ParameterValue": "t3.micro"
   },

@@ -17,8 +17,18 @@ Parameters:
     Type: String
 
   GitSha:
-    Description: The GitSha of commit project
+    Description: The GitSha of commit project (for backward compatibility)
     Type: String
+
+  BackendGitSha:
+    Description: The GitSha for backend service image
+    Type: String
+    Default: latest
+
+  FrontendGitSha:
+    Description: The GitSha for frontend service image
+    Type: String
+    Default: latest
 
   # ECS Cluster Parameters
   InstanceType:
@@ -246,7 +256,7 @@ Resources:
           - !Ref AWS::NoValue
         CPU: !Ref BackendCPU
         MemoryReservation: !Ref BackendMemoryReservation
-        ContainerUrl: !Sub "${ImageUrl}/backend:${GitSha}"
+        ContainerUrl: !Sub "${ImageUrl}/backend:${BackendGitSha}"
         TargetGroup: !GetAtt ALB.Outputs.BackendTargetGroup
         TaskRole: !Ref TaskRole
         ScaleUpThreshold: 80
@@ -274,7 +284,7 @@ Resources:
           - !Ref AWS::NoValue
         CPU: !Ref FrontendCPU
         MemoryReservation: !Ref FrontendMemoryReservation
-        ContainerUrl: !Sub "${ImageUrl}/frontend:${GitSha}"
+        ContainerUrl: !Sub "${ImageUrl}/frontend:${FrontendGitSha}"
         TargetGroup: !GetAtt ALB.Outputs.FrontendTargetGroup
         TaskRole: !Ref TaskRole
         ScaleUpThreshold: 80
