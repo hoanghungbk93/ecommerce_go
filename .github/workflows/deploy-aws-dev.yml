@@ -31,7 +31,6 @@ jobs:
             - 'Makefile'
           frontend:
             - 'frontend/**'
-            - 'docker-compose.prod.yml'
 
   test-backend:
     runs-on: ubuntu-latest
