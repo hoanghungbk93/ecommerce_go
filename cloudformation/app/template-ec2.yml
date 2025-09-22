@@ -215,15 +215,6 @@ Resources:
         SecurityGroups: !Sub "{{resolve:ssm:/${EnvironmentName}/ecommerce/security-group/app}}"
         CapacityTooHighThreshold: 0
 
-  # Simple Redis Cache
-  RedisCache:
-    Type: AWS::ElastiCache::CacheCluster
-    Properties:
-      ClusterName: !Sub "${EnvironmentName}-ecommerce-redis"
-      CacheNodeType: cache.t3.micro
-      Engine: redis
-      NumCacheNodes: 1
-
   # Application Load Balancer using shared template from S3
   ALB:
     Type: AWS::CloudFormation::Stack

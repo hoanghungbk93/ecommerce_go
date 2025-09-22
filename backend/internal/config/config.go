@@ -38,10 +38,11 @@ func Load() *Config {
 	useWebhookLambda, _ := strconv.ParseBool(getEnv("USE_WEBHOOK_LAMBDA", "false"))
 	redisDB, _ := strconv.Atoi(getEnv("REDIS_DB", "0"))
 
-	// Hardcoded Redis for dev environment testing
+	// For testing - disable Redis in dev until infrastructure is properly set up
 	redisAddr := getEnv("REDIS_ADDR", "")
-	if redisAddr == "" && getEnv("ENV", "") == "dev" {
-		redisAddr = "dev-ecommerce-redis.fhweiy.0001.apse1.cache.amazonaws.com:6379"
+	// Temporarily disable Redis for dev testing
+	if getEnv("ENV", "") == "dev" {
+		redisAddr = "" // Disable Redis for now
 	}
 
 	return &Config{
