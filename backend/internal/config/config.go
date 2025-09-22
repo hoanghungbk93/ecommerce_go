@@ -26,6 +26,9 @@ type Config struct {
 	BaseURL       string
 	LambdaWebhookURL string
 	UseWebhookLambda bool
+	RedisAddr     string
+	RedisPassword string
+	RedisDB       int
 }
 
 func Load() *Config {
@@ -33,6 +36,7 @@ func Load() *Config {
 	taxRate, _ := strconv.ParseFloat(getEnv("TAX_RATE", "0.1"), 64)
 	shippingCost, _ := strconv.ParseFloat(getEnv("SHIPPING_COST", "25000"), 64)
 	useWebhookLambda, _ := strconv.ParseBool(getEnv("USE_WEBHOOK_LAMBDA", "false"))
+	redisDB, _ := strconv.Atoi(getEnv("REDIS_DB", "0"))
 
 	return &Config{
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://localhost/ecommerce?sslmode=disable"),
@@ -55,6 +59,9 @@ func Load() *Config {
 		BaseURL:       getEnv("BASE_URL", "http://localhost:8080"),
 		LambdaWebhookURL: getEnv("LAMBDA_WEBHOOK_URL", ""),
 		UseWebhookLambda: useWebhookLambda,
+		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPassword: getEnv("REDIS_PASSWORD", ""),
+		RedisDB:       redisDB,
 	}
 }
 

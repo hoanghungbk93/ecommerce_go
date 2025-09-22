@@ -1,21 +1,29 @@
 package handlers
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"ecommerce-backend/internal/models"
+	"ecommerce-backend/internal/services"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 type ProductHandler struct {
-	db *gorm.DB
+	db    *gorm.DB
+	redis *services.RedisService
 }
 
-func NewProductHandler(db *gorm.DB) *ProductHandler {
-	return &ProductHandler{db: db}
+func NewProductHandler(db *gorm.DB, redis *services.RedisService) *ProductHandler {
+	return &ProductHandler{
+		db:    db,
+		redis: redis,
+	}
 }
 
 type CreateProductRequest struct {
@@ -34,9 +42,28 @@ type CreateProductRequest struct {
 
 func (h *ProductHandler) GetProducts(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
 	search := c.Query("search")
 	categoryID := c.Query("category_id")
+
+	if h.redis != nil {
+		ctx := context.Background()
+		cacheKey := h.redis.GenerateProductListCacheKey(page, limit, search, categoryID)
+
+		var cachedData services.ProductListCache
+		if err := h.redis.Get(ctx, cacheKey, &cachedData); err == nil {
+			log.Printf("Cache hit for key: %s", cacheKey)
+			c.JSON(http.StatusOK, gin.H{
+				"products": cachedData.Products,
+				"total":    cachedData.Total,
+				"page":     cachedData.Page,
+				"limit":    cachedData.Limit,
+			})
+			return
+		}
+
+		log.Printf("Cache miss for key: %s", cacheKey)
+	}
 
 	offset := (page - 1) * limit
 	query := h.db.Where("is_active = ?", true)
@@ -55,12 +82,43 @@ func (h *ProductHandler) GetProducts(c *gin.Context) {
 	query.Model(&models.Product{}).Count(&total)
 	query.Preload("Category").Offset(offset).Limit(limit).Find(&products)
 
-	c.JSON(http.StatusOK, gin.H{
+	responseData := gin.H{
 		"products": products,
 		"total":    total,
 		"page":     page,
 		"limit":    limit,
-	})
+	}
+
+	if h.redis != nil {
+		ctx := context.Background()
+		cacheKey := h.redis.GenerateProductListCacheKey(page, limit, search, categoryID)
+		cacheData := services.ProductListCache{
+			Products: products,
+			Total:    total,
+			Page:     page,
+			Limit:    limit,
+		}
+
+		if err := h.redis.Set(ctx, cacheKey, cacheData, 10*time.Minute); err != nil {
+			log.Printf("Failed to cache data for key %s: %v", cacheKey, err)
+		} else {
+			log.Printf("Cached data for key: %s", cacheKey)
+		}
+	}
+
+	c.JSON(http.StatusOK, responseData)
+}
+
+func (h *ProductHandler) invalidateProductListCache() {
+	if h.redis != nil {
+		ctx := context.Background()
+		pattern := "products:list:*"
+		if err := h.redis.DeletePattern(ctx, pattern); err != nil {
+			log.Printf("Failed to invalidate product list cache: %v", err)
+		} else {
+			log.Printf("Invalidated product list cache with pattern: %s", pattern)
+		}
+	}
 }
 
 func (h *ProductHandler) GetProduct(c *gin.Context) {
@@ -111,6 +169,8 @@ func (h *ProductHandler) CreateProduct(c *gin.Context) {
 
 	h.db.Preload("Category").First(&product, product.ID)
 
+	h.invalidateProductListCache()
+
 	c.JSON(http.StatusCreated, product)
 }
 
@@ -155,6 +215,8 @@ func (h *ProductHandler) UpdateProduct(c *gin.Context) {
 
 	h.db.Preload("Category").First(&product, product.ID)
 
+	h.invalidateProductListCache()
+
 	c.JSON(http.StatusOK, product)
 }
 
@@ -171,6 +233,8 @@ func (h *ProductHandler) DeleteProduct(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete product"})
 		return
 	}
+
+	h.invalidateProductListCache()
 
 	c.JSON(http.StatusOK, gin.H{"message": "Product deleted successfully"})
 }
@@ -190,6 +254,8 @@ func (h *ProductHandler) ApproveProduct(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to approve product"})
 		return
 	}
+
+	h.invalidateProductListCache()
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Product approved successfully",
