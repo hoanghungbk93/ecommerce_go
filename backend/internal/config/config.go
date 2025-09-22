@@ -38,6 +38,12 @@ func Load() *Config {
 	useWebhookLambda, _ := strconv.ParseBool(getEnv("USE_WEBHOOK_LAMBDA", "false"))
 	redisDB, _ := strconv.Atoi(getEnv("REDIS_DB", "0"))
 
+	// Hardcoded Redis for dev environment testing
+	redisAddr := getEnv("REDIS_ADDR", "")
+	if redisAddr == "" && getEnv("ENV", "") == "dev" {
+		redisAddr = "dev-ecommerce-redis.fhweiy.0001.apse1.cache.amazonaws.com:6379"
+	}
+
 	return &Config{
 		DatabaseURL:   getEnv("DATABASE_URL", "postgres://localhost/ecommerce?sslmode=disable"),
 		JWTSecret:     getEnv("JWT_SECRET", "your-secret-key-change-in-production"),
@@ -59,7 +65,7 @@ func Load() *Config {
 		BaseURL:       getEnv("BASE_URL", "http://localhost:8080"),
 		LambdaWebhookURL: getEnv("LAMBDA_WEBHOOK_URL", ""),
 		UseWebhookLambda: useWebhookLambda,
-		RedisAddr:     getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisAddr:     redisAddr,
 		RedisPassword: getEnv("REDIS_PASSWORD", ""),
 		RedisDB:       redisDB,
 	}
