@@ -187,7 +187,13 @@ jobs:
 
     - name: Update CloudFormation parameters with git SHA
       run: |
-        sed -i 's/"latest"/"${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
+        # Update git SHA only if any component changed
+        if [ "${{ needs.detect-changes.outputs.any-changed }}" == "true" ]; then
+          echo "Updating GitSha parameter to ${{ github.sha }}"
+          sed -i 's/"latest"/"${{ github.sha }}"/g' cloudformation/app/${{ env.ENV }}-ec2.json
+        else
+          echo "No changes detected - keeping existing image tags"
+        fi
 
     - name: Deploy to AWS
       run: |
@@ -199,89 +205,8 @@ jobs:
           --region ${{ env.AWS_REGION }} \
           --no-fail-on-empty-changeset
 
-    - name: Update backend service
-      if: needs.detect-changes.outputs.backend-changed == 'true'
-      run: |
-        echo "🔄 Updating backend ECS service..."
-        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
-        if [ -n "$CLUSTER_NAME" ]; then
-          aws ecs update-service \
-            --cluster "$CLUSTER_NAME" \
-            --service ${{ env.ENV }}-ecommerce-backend \
-            --desired-count 1 \
-            --force-new-deployment \
-            --region ${{ env.AWS_REGION }}
-        else
-          echo "❌ Cluster not found"
-          exit 1
-        fi
-
-    - name: Update frontend service
-      if: needs.detect-changes.outputs.frontend-changed == 'true'
-      run: |
-        echo "🔄 Updating frontend ECS service..."
-        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
-        if [ -n "$CLUSTER_NAME" ]; then
-          aws ecs update-service \
-            --cluster "$CLUSTER_NAME" \
-            --service ${{ env.ENV }}-ecommerce-frontend \
-            --desired-count 1 \
-            --force-new-deployment \
-            --region ${{ env.AWS_REGION }}
-        else
-          echo "❌ Cluster not found"
-          exit 1
-        fi
-
-    - name: Ensure services are running
-      run: |
-        echo "🚀 Ensuring all services are started..."
-        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
-        if [ -n "$CLUSTER_NAME" ]; then
-          # Ensure backend service is running (only if not already updated)
-          if [ "${{ needs.detect-changes.outputs.backend-changed }}" != "true" ]; then
-            echo "Starting backend service..."
-            aws ecs update-service \
-              --cluster "$CLUSTER_NAME" \
-              --service ${{ env.ENV }}-ecommerce-backend \
-              --desired-count 1 \
-              --region ${{ env.AWS_REGION }} || true
-          fi
-
-          # Ensure frontend service is running (only if not already updated)
-          if [ "${{ needs.detect-changes.outputs.frontend-changed }}" != "true" ]; then
-            echo "Starting frontend service..."
-            aws ecs update-service \
-              --cluster "$CLUSTER_NAME" \
-              --service ${{ env.ENV }}-ecommerce-frontend \
-              --desired-count 1 \
-              --region ${{ env.AWS_REGION }} || true
-          fi
-        fi
-
-    - name: Wait for backend deployment to complete
-      if: needs.detect-changes.outputs.backend-changed == 'true'
-      run: |
-        echo "⏳ Waiting for backend service to stabilize..."
-        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
-        if [ -n "$CLUSTER_NAME" ]; then
-          aws ecs wait services-stable \
-            --cluster "$CLUSTER_NAME" \
-            --services ${{ env.ENV }}-ecommerce-backend \
-            --region ${{ env.AWS_REGION }}
-        fi
-
-    - name: Wait for frontend deployment to complete
-      if: needs.detect-changes.outputs.frontend-changed == 'true'
-      run: |
-        echo "⏳ Waiting for frontend service to stabilize..."
-        CLUSTER_NAME=$(aws cloudformation describe-stacks --stack-name ${{ env.ENV }}-ecommerce-ec2-app --query 'Stacks[0].Outputs[?OutputKey==`ClusterName`].OutputValue' --output text --region ${{ env.AWS_REGION }} 2>/dev/null || echo "")
-        if [ -n "$CLUSTER_NAME" ]; then
-          aws ecs wait services-stable \
-            --cluster "$CLUSTER_NAME" \
-            --services ${{ env.ENV }}-ecommerce-frontend \
-            --region ${{ env.AWS_REGION }}
-        fi
+    # CloudFormation deployment automatically handles all service updates and waits
+    # No need for manual ECS service operations - this speeds up deployment significantly
 
     - name: Get deployment URLs
       id: get-urls
@@ -291,41 +216,7 @@ jobs:
         echo "frontend_url=$FRONTEND_URL" >> $GITHUB_OUTPUT
         echo "backend_url=$BACKEND_URL" >> $GITHUB_OUTPUT
 
-    - name: Backend health check
-      if: needs.detect-changes.outputs.backend-changed == 'true'
-      run: |
-        echo "🏥 Performing backend health check..."
-
-        if [ "${{ steps.get-urls.outputs.backend_url }}" != "Not found" ]; then
-          echo "Testing backend: ${{ steps.get-urls.outputs.backend_url }}/health"
-          for i in {1..5}; do
-            if curl -f -s --max-time 10 "${{ steps.get-urls.outputs.backend_url }}/health" > /dev/null; then
-              echo "✅ Backend health check passed"
-              break
-            else
-              echo "⏳ Attempt $i: Backend not ready yet, waiting..."
-              sleep 30
-            fi
-          done
-        fi
-
-    - name: Frontend health check
-      if: needs.detect-changes.outputs.frontend-changed == 'true'
-      run: |
-        echo "🏥 Performing frontend health check..."
-
-        if [ "${{ steps.get-urls.outputs.frontend_url }}" != "Not found" ]; then
-          echo "Testing frontend: ${{ steps.get-urls.outputs.frontend_url }}"
-          for i in {1..3}; do
-            if curl -f -s --max-time 10 "${{ steps.get-urls.outputs.frontend_url }}" > /dev/null; then
-              echo "✅ Frontend health check passed"
-              break
-            else
-              echo "⏳ Attempt $i: Frontend not ready yet, waiting..."
-              sleep 20
-            fi
-          done
-        fi
+    # Health checks removed for faster deployment - CloudFormation handles service health
 
     - name: Deployment Summary
       run: |
