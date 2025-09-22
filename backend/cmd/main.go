@@ -33,15 +33,23 @@ func main() {
 		log.Fatal("Failed to run migrations:", err)
 	}
 
-	redisService := services.NewRedisService(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
-
-	ctx := context.Background()
-	if err := redisService.Ping(ctx); err != nil {
-		log.Printf("Warning: Redis connection failed: %v", err)
-		log.Println("Continuing without Redis caching...")
-		redisService = nil
+	var redisService *services.RedisService
+	if cfg.RedisAddr != "" {
+		redisService = services.NewRedisService(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+		log.Printf("✅ Redis service initialized: %s", cfg.RedisAddr)
 	} else {
-		log.Println("Redis connected successfully")
+		log.Println("⚠️  Redis not configured - caching disabled")
+	}
+
+	if redisService != nil {
+		ctx := context.Background()
+		if err := redisService.Ping(ctx); err != nil {
+			log.Printf("❌ Redis connection failed: %v", err)
+			log.Println("Continuing without Redis caching...")
+			redisService = nil
+		} else {
+			log.Println("🔗 Redis connected successfully")
+		}
 	}
 
 	r := gin.Default()
