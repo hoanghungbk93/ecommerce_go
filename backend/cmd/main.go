@@ -190,5 +190,6 @@ func main() {
 	}
 
 	log.Printf("Server starting on port %s", port)
+	log.Println("✅ Backend deployment test - CI/CD filter fix applied")
 	log.Fatal(http.ListenAndServe(":"+port, r))
 }
